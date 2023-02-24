@@ -1939,6 +1939,27 @@ void build_srat_memory(GArray *table_data, uint64_t base,
 }
 
 /*
+ * ACPI spec, Revision 6.5
+ * 5.2.16.7 Generic Port Affinity Structure
+ */
+void build_srat_generic_port_affinity(GArray *table_data, uint8_t htype,
+                                      int node, ACPIDeviceHandle *handle,
+                                      GenericAffinityFlags flags)
+{
+    build_append_int_noprefix(table_data, 6, 1);     /* Type */
+    build_append_int_noprefix(table_data, 32, 1);    /* Length */
+    build_append_int_noprefix(table_data, 0, 1);     /* Reserved */
+    build_append_int_noprefix(table_data, htype, 1); /* Device Handle Type */
+    build_append_int_noprefix(table_data, node, 4);  /* Proximity Domain */
+    build_append_int_noprefix(table_data, handle->raw[0],
+                              8); /* Device Handle part 1 */
+    build_append_int_noprefix(table_data, handle->raw[1],
+                              8);                    /* Device Handle part 2 */
+    build_append_int_noprefix(table_data, flags, 4); /* Flags */
+    build_append_int_noprefix(table_data, 0, 4);     /* Reserved */
+}
+
+/*
  * ACPI spec 5.2.17 System Locality Distance Information Table
  * (Revision 2.0 or later)
  */

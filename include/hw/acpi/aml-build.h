@@ -204,12 +204,35 @@ typedef enum {
     AML_PULL_NONE = 3,
 } AmlPinConfig;
 
+/*
+ * ACPI 6.5: Table 5-68 Flags - Generic Initiator/Port Affinity Structure
+ * Flags field definition
+ */
 typedef enum {
     MEM_AFFINITY_NOFLAGS      = 0,
     MEM_AFFINITY_ENABLED      = (1 << 0),
     MEM_AFFINITY_HOTPLUGGABLE = (1 << 1),
     MEM_AFFINITY_NON_VOLATILE = (1 << 2),
 } MemoryAffinityFlags;
+
+/*
+ * ACPI 6.5: Table 5-65 Device Handle - ACPI
+ * Device Handle definition
+ */
+typedef union ACPIDeviceHandle {
+    struct {
+        uint8_t hid[8];
+        uint32_t uid;
+        uint32_t reserved;
+    };
+    uint64_t raw[2];
+} ACPIDeviceHandle;
+
+typedef enum {
+    GEN_AFFINITY_NOFLAGS = 0,
+    GEN_AFFINITY_ENABLED = (1 << 0),
+    GEN_AFFINITY_ARCH_TRANS = (2 << 0),
+} GenericAffinityFlags;
 
 typedef
 struct AcpiBuildTables {
@@ -487,6 +510,10 @@ Aml *build_crs(PCIHostState *host, CrsRangeSet *range_set, uint32_t io_offset,
 
 void build_srat_memory(GArray *table_data, uint64_t base,
                        uint64_t len, int node, MemoryAffinityFlags flags);
+
+void build_srat_generic_port_affinity(GArray *table_data, uint8_t htype,
+                                      int node, ACPIDeviceHandle *handle,
+                                      GenericAffinityFlags flags);
 
 void build_slit(GArray *table_data, BIOSLinker *linker, MachineState *ms,
                 const char *oem_id, const char *oem_table_id);
