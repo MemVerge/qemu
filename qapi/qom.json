@@ -461,6 +461,16 @@
   'data': { '*vnet_hdr_support': 'bool' } }
 
 ##
+# @GenericPortDeviceProperties:
+#
+# Properties for generic port devices.
+#
+# Since: 7.2
+##
+{ 'struct': 'GenericPortDeviceProperties',
+  'data': {} }
+
+##
 # @InputBarrierProperties:
 #
 # Properties for input-barrier objects.
@@ -931,6 +941,7 @@
     'filter-redirector',
     'filter-replay',
     'filter-rewriter',
+    'genport',
     'input-barrier',
     { 'name': 'input-linux',
       'if': 'CONFIG_LINUX' },
@@ -1000,6 +1011,7 @@
       'filter-redirector':          'FilterRedirectorProperties',
       'filter-replay':              'NetfilterProperties',
       'filter-rewriter':            'FilterRewriterProperties',
+      'genport':                    'GenericPortDeviceProperties',
       'input-barrier':              'InputBarrierProperties',
       'input-linux':                { 'type': 'InputLinuxProperties',
                                       'if': 'CONFIG_LINUX' },

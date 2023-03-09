@@ -479,7 +479,8 @@
    '*cpus':   ['uint16'],
    '*mem':    'size',
    '*memdev': 'str',
-   '*initiator': 'uint16' }}
+   '*initiator': 'uint16',
+   '*genport': 'str' }}
 
 ##
 # @NumaDistOptions:
