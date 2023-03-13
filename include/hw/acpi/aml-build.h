@@ -222,8 +222,8 @@ typedef enum {
 typedef union ACPIDeviceHandle {
     struct {
         uint8_t hid[8];
-        uint32_t uid;
-        uint32_t reserved;
+        uint8_t uid[4];
+        uint8_t reserved[4];
     };
     uint64_t raw[2];
 } ACPIDeviceHandle;

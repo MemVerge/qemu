@@ -1659,11 +1659,22 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
             aml_append(dev, aml_name_decl("_BBN", aml_int(bus_num)));
             if (pci_bus_is_cxl(bus)) {
                 struct Aml *aml_pkg = aml_package(2);
-                CxlHBDev *hb_entry;
+                CxlHBDev *hb_entry, *match;
+		bool found = false;
 
-                hb_entry = g_malloc0(sizeof(*hb_entry));
-                hb_entry->uid = bus_num;
-                QSLIST_INSERT_HEAD(&cxl_hb_list_head, hb_entry, entry);
+		printf("XXX %s called\n", __func__);
+		QSLIST_FOREACH(match, &cxl_hb_list_head, entry) {
+			if (match->uid == bus_num) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			printf("Add ACPI0016 UID %u\n", bus_num);
+			hb_entry = g_malloc0(sizeof(*hb_entry));
+			hb_entry->uid = bus_num;
+			QSLIST_INSERT_HEAD(&cxl_hb_list_head, hb_entry, entry);
+		}
 
                 aml_append(dev, aml_name_decl("_HID", aml_string("ACPI0016")));
                 aml_append(aml_pkg, aml_eisaid("PNP0A08"));
@@ -2034,6 +2045,7 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
     NodeInfo *numa_info = machine->numa_state->nodes;
     AcpiTable table = { .sig = "SRAT", .rev = 1, .oem_id = x86ms->oem_id,
                         .oem_table_id = x86ms->oem_table_id };
+    int pxm_domain;
 
     acpi_table_begin(&table, table_data);
     build_append_int_noprefix(table_data, 1, 4); /* Reserved */
@@ -2128,16 +2140,24 @@ build_srat(GArray *table_data, BIOSLinker *linker, MachineState *machine)
 
     sgx_epc_build_srat(table_data);
 
+    /* FIXME: this is a hack, need a node property for genport */
+    pxm_domain = 6;
     QSLIST_FOREACH(hb_entry, &cxl_hb_list_head, entry)
     {
         ACPIDeviceHandle handle = {
             .hid = "ACPI0016",
-            .uid = hb_entry->uid,
+	    .reserved = { 0 },
         };
+	char uid_str[5];
         uint32_t flags = GEN_AFFINITY_ENABLED;
 
-        build_srat_generic_port_affinity(table_data, 0, nb_numa_nodes,
+	snprintf(uid_str, 4, "%u", hb_entry->uid);
+	memcpy(handle.uid, uid_str, 4);
+
+	printf("Add SRAT entry for pxm domain %u\n", pxm_domain);
+        build_srat_generic_port_affinity(table_data, 0, pxm_domain,
                                          &handle, flags);
+	pxm_domain++;
     }
 
     /*

@@ -2597,10 +2597,36 @@ static void qemu_init_board(void)
     realtime_init();
 }
 
+static int genport_realize_cb(Object *obj, void *opaque)
+{
+    DeviceState *dev = DEVICE(object_dynamic_cast(obj, TYPE_DEVICE));
+    ObjectClass *klass = object_get_class(obj);
+    ObjectClass *type_klass = object_class_by_name("genport");
+
+    if (!dev)
+            return 0;
+
+    if (dev->realized)
+            return 0;
+
+    if (klass != type_klass)
+            return 0;
+
+    qdev_realize(dev, NULL, &error_fatal);
+    return 0;
+}
+
+static void genports_realize(void)
+{
+        object_child_foreach_recursive(object_get_root(),
+                        genport_realize_cb, NULL);
+}
+
 static void qemu_create_cli_devices(void)
 {
     DeviceOption *opt;
 
+printf("%s called\n", __func__);
     soundhw_init();
 
     qemu_opts_foreach(qemu_find_opts("fw_cfg"),
@@ -2631,6 +2657,7 @@ static void qemu_create_cli_devices(void)
         loc_pop(&opt->loc);
     }
     rom_reset_order_override();
+    genports_realize();
 }
 
 static void qemu_machine_creation_done(void)
