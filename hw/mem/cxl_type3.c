@@ -18,6 +18,7 @@
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/spdm.h"
+#include <sys/shm.h>
 
 #define DWORD_BYTE 4
 
@@ -794,6 +795,48 @@ static DOEProtocol doe_spdm_prot[] = {
     { }
 };
 
+static bool cxl_setup_mhd(CXLType3Dev *ct3d, Error **errp)
+{
+    if (!ct3d->is_mhd) {
+        ct3d->mhd_access_valid = NULL;
+        return true;
+    } else if (ct3d->is_mhd &&
+               (!ct3d->mhd_shmid || (ct3d->mhd_head == ~(0)))) {
+        error_setg(errp, "is_mhd requires mhd_shmid and mhd_head settings");
+        return false;
+    } else if (!ct3d->is_mhd &&
+               (ct3d->mhd_shmid || (ct3d->mhd_head == ~(0)))) {
+        error_setg(errp, "(is_mhd,mhd_head,mhd_shmid) invalid");
+        return false;
+    }
+
+    if (ct3d->mhd_head >= 32) {
+        error_setg(errp, "MHD Head ID must be between 0-31");
+        return false;
+    }
+
+    ct3d->mhd_state = shmat(ct3d->mhd_shmid, NULL, 0);
+    if (ct3d->mhd_state == (void*)-1) {
+        ct3d->mhd_state = NULL;
+        error_setg(errp, "Unable to attach MHD State. Check ipcs is valid");
+        return false;
+    }
+
+    /* For now, limit the number of heads to the number of LD's (SLD) */
+    if (ct3d->mhd_state->nr_heads <= ct3d->mhd_head) {
+        error_setg(errp, "Invalid head ID for multiheaded device.");
+        return false;
+    }
+
+    if (ct3d->mhd_state->nr_lds <= ct3d->mhd_head) {
+        error_setg(errp, "MHD Shared state does not have sufficient lds.");
+        return false;
+    }
+
+    ct3d->mhd_state->ldmap[ct3d->mhd_head] = ct3d->mhd_head;
+    return true;
+}
+
 static void ct3_realize(PCIDevice *pci_dev, Error **errp)
 {
     CXLType3Dev *ct3d = CXL_TYPE3(pci_dev);
@@ -805,6 +848,10 @@ static void ct3_realize(PCIDevice *pci_dev, Error **errp)
     int i, rc;
 
     QTAILQ_INIT(&ct3d->error_list);
+
+    if (!cxl_setup_mhd(ct3d, errp)) {
+        return;
+    }
 
     if (!cxl_setup_memory(ct3d, errp)) {
         return;
@@ -910,6 +957,9 @@ static void ct3_exit(PCIDevice *pci_dev)
     if (ct3d->hostvmem) {
         address_space_destroy(&ct3d->hostvmem_as);
     }
+    if (ct3d->mhd_state) {
+        shmdt(ct3d->mhd_state);
+    }
 }
 
 static bool cxl_type3_dpa(CXLType3Dev *ct3d, hwaddr host_addr, uint64_t *dpa)
@@ -1006,6 +1056,7 @@ static int cxl_type3_hpa_to_as_and_dpa(CXLType3Dev *ct3d,
 MemTxResult cxl_type3_read(PCIDevice *d, hwaddr host_addr, uint64_t *data,
                            unsigned size, MemTxAttrs attrs)
 {
+    CXLType3Dev *ct3d = CXL_TYPE3(d);
     uint64_t dpa_offset = 0;
     AddressSpace *as = NULL;
     int res;
@@ -1014,18 +1065,25 @@ MemTxResult cxl_type3_read(PCIDevice *d, hwaddr host_addr, uint64_t *data,
                                       &as, &dpa_offset);
     if (res) {
         return MEMTX_ERROR;
+    }
+
+    if (ct3d->is_mhd && ct3d->mhd_access_valid) {
+        if (!ct3d->mhd_access_valid(ct3d, dpa_offset, size))
+            return MEMTX_ERROR;
     }
 
     if (sanitize_running(&CXL_TYPE3(d)->cci)) {
         qemu_guest_getrandom_nofail(data, size);
         return MEMTX_OK;
     }
+
     return address_space_read(as, dpa_offset, attrs, data, size);
 }
 
 MemTxResult cxl_type3_write(PCIDevice *d, hwaddr host_addr, uint64_t data,
                             unsigned size, MemTxAttrs attrs)
 {
+    CXLType3Dev *ct3d = CXL_TYPE3(d);
     uint64_t dpa_offset = 0;
     AddressSpace *as = NULL;
     int res;
@@ -1035,6 +1093,12 @@ MemTxResult cxl_type3_write(PCIDevice *d, hwaddr host_addr, uint64_t data,
     if (res) {
         return MEMTX_ERROR;
     }
+
+    if (ct3d->is_mhd && ct3d->mhd_access_valid) {
+        if (!ct3d->mhd_access_valid(ct3d, dpa_offset, size))
+            return MEMTX_ERROR;
+    }
+
     if (sanitize_running(&CXL_TYPE3(d)->cci)) {
         return MEMTX_OK;
     }
@@ -1067,6 +1131,9 @@ static Property ct3_props[] = {
     DEFINE_PROP_UINT64("sn", CXLType3Dev, sn, UI64_NULL),
     DEFINE_PROP_STRING("cdat", CXLType3Dev, cxl_cstate.cdat.filename),
     DEFINE_PROP_UINT16("spdm", CXLType3Dev, spdm_port, 0),
+    DEFINE_PROP_BOOL("is_mhd", CXLType3Dev, is_mhd, false),
+    DEFINE_PROP_UINT32("mhd_head", CXLType3Dev, mhd_head, 0),
+    DEFINE_PROP_UINT32("mhd_shmid", CXLType3Dev, mhd_shmid, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 

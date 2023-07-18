@@ -408,6 +408,12 @@ typedef struct CXLPoison {
 typedef QLIST_HEAD(, CXLPoison) CXLPoisonList;
 #define CXL_POISON_LIST_LIMIT 256
 
+struct CXLMHD_SharedState {
+    uint8_t nr_heads;
+    uint8_t nr_lds;
+    uint8_t ldmap[];
+};
+
 struct CXLType3Dev {
     /* Private */
     PCIDevice parent_obj;
@@ -442,6 +448,14 @@ struct CXLType3Dev {
     unsigned int poison_list_cnt;
     bool poison_list_overflowed;
     uint64_t poison_list_overflow_ts;
+
+    /* Multi-headed Device */
+    bool is_mhd;
+    uint32_t mhd_head;
+    uint32_t mhd_shmid;
+    struct CXLMHD_SharedState *mhd_state;
+    bool (*mhd_access_valid)(CXLType3Dev* ct3d, uint64_t addr,
+                             unsigned int size);
 };
 
 #define TYPE_CXL_TYPE3 "cxl-type3"
