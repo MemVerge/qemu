@@ -1,6 +1,12 @@
+source vendor/Kconfig
+
 config CXL
     bool
     default y if PCI_EXPRESS
+
+config CXL_VENDOR
+    bool
+    default y
 
 config I2C_MCTP_CXL
     bool
