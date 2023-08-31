@@ -878,6 +878,10 @@ void ct3_realize(PCIDevice *pci_dev, Error **errp)
             goto err_release_cdat;
         }
     }
+
+    /* Devices which inherit ct3d should initialize these after ct3_realize */
+    ct3d->mhd_access_valid = NULL;
+
     return;
 
 err_release_cdat:
@@ -1017,6 +1021,11 @@ MemTxResult cxl_type3_read(PCIDevice *d, hwaddr host_addr, uint64_t *data,
         return MEMTX_ERROR;
     }
 
+    if (ct3d->mhd_access_valid &&
+        !ct3d->mhd_access_valid(d, dpa_offset, size)) {
+        return MEMTX_ERROR;
+    }
+
     if (sanitize_running(&ct3d->cci)) {
         qemu_guest_getrandom_nofail(data, size);
         return MEMTX_OK;
@@ -1037,6 +1046,12 @@ MemTxResult cxl_type3_write(PCIDevice *d, hwaddr host_addr, uint64_t data,
     if (res) {
         return MEMTX_ERROR;
     }
+
+    if (ct3d->mhd_access_valid &&
+        !ct3d->mhd_access_valid(d, dpa_offset, size)) {
+        return MEMTX_ERROR;
+    }
+
     if (sanitize_running(&ct3d->cci)) {
         return MEMTX_OK;
     }

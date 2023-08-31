@@ -442,6 +442,9 @@ struct CXLType3Dev {
     unsigned int poison_list_cnt;
     bool poison_list_overflowed;
     uint64_t poison_list_overflow_ts;
+
+    /* Multi-headed Device */
+    bool (*mhd_access_valid)(PCIDevice *d, uint64_t addr, unsigned int size);
 };
 
 #define TYPE_CXL_TYPE3 "cxl-type3"
