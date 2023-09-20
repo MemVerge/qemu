@@ -1,3 +1,5 @@
+source vendor/Kconfig
+
 config CXL
     bool
     default y if PCI_EXPRESS
