@@ -57,6 +57,7 @@
 #include "hw/i386/kvm/xen_evtchn.h"
 #include "hw/i386/kvm/xen_gnttab.h"
 #include "hw/i386/kvm/xen_xenstore.h"
+#include "hw/i2c/aspeed_i2c.h"
 #include "e820_memory_layout.h"
 #include "trace.h"
 #include CONFIG_DEVICES
@@ -1010,6 +1011,8 @@ void pc_memory_init(PCMachineState *pcms,
         memory_region_init(mr, OBJECT(machine), "cxl_host_reg", cxl_size);
         memory_region_add_subregion(system_memory, cxl_base, mr);
         cxl_resv_end = cxl_base + cxl_size;
+        pcms->i2c_base = cxl_resv_end - 0x4000;
+
         if (pcms->cxl_devices_state.fixed_windows) {
             hwaddr cxl_fmw_base;
             GList *it;
@@ -1092,7 +1095,7 @@ uint64_t pc_pci_hole64_start(void)
     ram_addr_t size = 0;
 
     if (pcms->cxl_devices_state.is_enabled) {
-        hole64_start = pc_get_cxl_range_end(pcms);
+        hole64_start = pc_get_cxl_range_end(pcms) + 0x4000;
     } else if (pcmc->has_reserved_memory && (ms->ram_size < ms->maxram_size)) {
         pc_get_device_memory_range(pcms, &hole64_start, &size);
         if (!pcmc->broken_reserved_end) {
@@ -1289,6 +1292,21 @@ void pc_basic_device_init(struct PCMachineState *pcms,
     /* Super I/O */
     pc_superio_init(isa_bus, create_fdctrl, pcms->i8042_enabled,
                     pcms->vmport != ON_OFF_AUTO_ON);
+
+    {
+        AspeedI2CState *aspeed_i2c;
+        struct DeviceState *dev;
+
+        dev = qdev_new("aspeed.i2c-ast2600");
+        aspeed_i2c = ASPEED_I2C(dev);
+        object_property_set_link(OBJECT(dev), "dram",
+                                 OBJECT(MACHINE(pcms)->ram), &error_fatal);
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, pcms->i2c_base);
+        /* Hack ;) - Steal unused interrupt 7 */
+        sysbus_connect_irq(SYS_BUS_DEVICE(&aspeed_i2c->busses[0]), 0,
+                           x86ms->gsi[7]);
+    }
 }
 
 void pc_nic_init(PCMachineClass *pcmc, ISABus *isa_bus, PCIBus *pci_bus)
