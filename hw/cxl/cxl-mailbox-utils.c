@@ -683,13 +683,13 @@ static CXLRetCode cmd_timestamp_set(const struct cxl_cmd *cmd,
     return CXL_MBOX_SUCCESS;
 }
 
-/* CXL 3.0 8.2.9.5.2.1 Command Effects Log (CEL) */
+/* CXL r3.0 seciton 8.2.9.5.2.1: Command Effects Log (CEL) */
 static const QemuUUID cel_uuid = {
     .data = UUID(0x0da9c0b5, 0xbf41, 0x4b78, 0x8f, 0x79,
                  0x96, 0xb1, 0x62, 0x3b, 0x3f, 0x17)
 };
 
-/* 8.2.9.4.1 */
+/* CXL r3.0 section 8.2.9.5.1: Get Supported Log (Opcode 0400h) */
 static CXLRetCode cmd_logs_get_supported(const struct cxl_cmd *cmd,
                                          uint8_t *payload_in,
                                          size_t len_in,
@@ -715,7 +715,7 @@ static CXLRetCode cmd_logs_get_supported(const struct cxl_cmd *cmd,
     return CXL_MBOX_SUCCESS;
 }
 
-/* 8.2.9.4.2 */
+/* CXL r3.0 section 8.2.9.5.2: Get Log (Opcode 0x401h) */
 static CXLRetCode cmd_logs_get_log(const struct cxl_cmd *cmd,
                                    uint8_t *payload_in,
                                    size_t len_in,
@@ -732,12 +732,6 @@ static CXLRetCode cmd_logs_get_log(const struct cxl_cmd *cmd,
     get_log = (void *)payload_in;
 
     /*
-     * 8.2.9.4.2
-     *   The device shall return Invalid Parameter if the Offset or Length
-     *   fields attempt to access beyond the size of the log as reported by Get
-     *   Supported Logs.
-     *
-     * XXX: Spec is wrong, "Invalid Parameter" isn't a thing.
      * XXX: Spec doesn't address incorrect UUID incorrectness.
      *
      * The CEL buffer is large enough to fit all commands in the emulation, so
