@@ -514,6 +514,14 @@
 #     accesses will go to a given interleave target.  Accepted values
 #     [256, 512, 1k, 2k, 4k, 8k, 16k]
 #
+# @restrictions: What type of CFMWS window has as bitmap of support features.
+#     BIT(0) - Device Coherent
+#     BIT(1) - Host Only Coherent
+#     BIT(2) - Volatile
+#     BIT(3) - Persistent
+#     BIT(4) - Fixed Device Config
+#     Default is 0xF
+#
 # @targets: Target root bridge IDs from -device ...,id=<ID> for each
 #     root bridge.
 #
@@ -523,6 +531,7 @@
   'data': {
       'size': 'size',
       '*interleave-granularity': 'size',
+      '*restrictions': 'int',
       'targets': ['str'] }}
 
 ##
