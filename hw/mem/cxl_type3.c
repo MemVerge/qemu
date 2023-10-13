@@ -1079,6 +1079,12 @@ static void ct3d_reset(DeviceState *dev)
     uint32_t *reg_state = ct3d->cxl_cstate.crb.cache_mem_registers;
     uint32_t *write_msk = ct3d->cxl_cstate.crb.cache_mem_regs_write_mask;
 
+    if (ct3d->dc.num_regions) {
+        ct3d->cxl_dstate.is_dcd = true;
+    } else {
+        ct3d->cxl_dstate.is_dcd = false;
+    }
+
     cxl_component_register_init_common(reg_state, write_msk, CXL2_TYPE3_DEVICE);
     cxl_device_register_init_t3(ct3d);
 
