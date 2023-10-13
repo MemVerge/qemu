@@ -13,6 +13,11 @@ typedef struct CXLUpstreamPort {
     CXLComponentState cxl_cstate;
     CXLCCI mctpcci;
     CXLCCI swcci;
+
+    MemoryRegion bar;
+    CPMUState cpmu;
+    MemoryRegion cpmu_registers;
+
     DOECap doe_cdat;
     uint64_t sn;
 } CXLUpstreamPort;
