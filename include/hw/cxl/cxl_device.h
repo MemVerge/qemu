@@ -15,6 +15,7 @@
 #include "hw/register.h"
 #include "hw/cxl/cxl_events.h"
 
+#include "hw/cxl/cxl_cpmu.h"
 /*
  * The following is how a CXL device's Memory Device registers are laid out.
  * The only requirement from the spec is that the capabilities array and the
@@ -25,6 +26,16 @@
  * mailbox payload (n) is given by
  * n = m + sizeof(mailbox registers) + sizeof(device registers).
  *
+ *                       +---------------------------------+
+ *                       |                                 |
+ *                       |             CPMU1               |
+ *                       |                                 |
+ *                       +---------------------------------+
+ *                       |                                 |
+ *                       |             CPMU0               |
+ *                       |                                 |
+ *                       +---------------------------------+
+ *                       |     Padding to 64k Aligned      |
  *                       +---------------------------------+
  *                       |                                 |
  *                       |    Memory Device Registers      |
@@ -79,9 +90,21 @@
     (CXL_MAILBOX_REGISTERS_OFFSET + CXL_MAILBOX_REGISTERS_LENGTH)
 #define CXL_MEMORY_DEVICE_REGISTERS_LENGTH 0x8
 
+#define CXL_NUM_CPMU_INSTANCES 2
+#define CXL_CPMU_SIZE          0x8f8
+#define CXL_CPMU_OFFSET(x)                                              \
+    QEMU_ALIGN_UP(CXL_MEMORY_DEVICE_REGISTERS_OFFSET +                  \
+                  CXL_MEMORY_DEVICE_REGISTERS_LENGTH +                  \
+                  (x) * (1 << 16),                                      \
+                  1 << 16)
+
 #define CXL_MMIO_SIZE                                                   \
-    (CXL_DEVICE_CAP_REG_SIZE + CXL_DEVICE_STATUS_REGISTERS_LENGTH +     \
-     CXL_MAILBOX_REGISTERS_LENGTH + CXL_MEMORY_DEVICE_REGISTERS_LENGTH)
+    QEMU_ALIGN_UP(CXL_DEVICE_CAP_REG_SIZE +                             \
+                  CXL_DEVICE_STATUS_REGISTERS_LENGTH +                  \
+                  CXL_MAILBOX_REGISTERS_LENGTH +                        \
+                  CXL_MEMORY_DEVICE_REGISTERS_LENGTH +                  \
+                  CXL_NUM_CPMU_INSTANCES * (1 << 16),                   \
+                  (1 << 16))
 
 /* 8.2.8.4.5.1 Command Return Codes */
 typedef enum {
@@ -169,6 +192,7 @@ typedef struct CXLCCI {
 typedef struct cxl_device_state {
     MemoryRegion device_registers;
 
+    MemoryRegion cpmu_registers[CXL_NUM_CPMU_INSTANCES];
     /* mmio for device capabilities array - 8.2.8.2 */
     struct {
         MemoryRegion device;
@@ -214,6 +238,7 @@ typedef struct cxl_device_state {
     uint64_t vmem_size;
 
     const struct cxl_cmd (*cxl_cmd_set)[256];
+    CPMUState cpmu[CXL_NUM_CPMU_INSTANCES];
     CXLEventLog event_logs[CXL_EVENT_TYPE_MAX];
 } CXLDeviceState;
 
