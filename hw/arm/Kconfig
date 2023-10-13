@@ -32,6 +32,8 @@ config ARM_VIRT
     select VIRTIO_MEM_SUPPORTED
     select ACPI_CXL
     select ACPI_HMAT
+    select I2C_MCTP
+    select I2C_MCTP_CXL
 
 config CHEETAH
     bool

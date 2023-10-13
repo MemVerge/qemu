@@ -85,6 +85,8 @@
 #include "hw/cxl/cxl.h"
 #include "hw/cxl/cxl_host.h"
 #include "qemu/guest-random.h"
+#include "hw/i2c/i2c.h"
+#include "hw/i2c/aspeed_i2c.h"
 
 #define DEFINE_VIRT_MACHINE_LATEST(major, minor, latest) \
     static void virt_##major##_##minor##_class_init(ObjectClass *oc, \
@@ -161,6 +163,8 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
+    [VIRT_I2C] =                { 0x0b000000, 0x00004000 },
+    [VIRT_RESET_FAKE] =         { 0x0b004000, 0x00000010 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
     [VIRT_SECURE_MEM] =         { 0x0e000000, 0x01000000 },
@@ -203,6 +207,7 @@ static const int a15irqmap[] = {
     [VIRT_GPIO] = 7,
     [VIRT_SECURE_UART] = 8,
     [VIRT_ACPI_GED] = 9,
+    [VIRT_I2C] = 10,
     [VIRT_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
@@ -2268,6 +2273,85 @@ static void virt_cpu_post_init(VirtMachineState *vms, MemoryRegion *sysmem)
     }
 }
 
+static void create_mctp(MachineState *ms)
+{
+    VirtMachineState *vms = VIRT_MACHINE(ms);
+    MemoryRegion *sysmem = get_system_memory();
+    AspeedI2CState *aspeedi2c;
+    struct DeviceState  *dev;
+    char *nodename_i2c_master;
+    char *nodename_i2c_sub;
+    char *nodename_reset;
+    uint32_t clk_phandle, reset_phandle;
+    MemoryRegion *sysmem2;
+
+    dev = qdev_new("aspeed.i2c-ast2600");
+    aspeedi2c = ASPEED_I2C(dev);
+    object_property_set_link(OBJECT(dev), "dram", OBJECT(ms->ram),
+                             &error_fatal);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, vms->memmap[VIRT_I2C].base);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&aspeedi2c->busses[0]), 0,
+                       qdev_get_gpio_in(vms->gic, vms->irqmap[VIRT_I2C]));
+
+    /* I2C bus DT */
+    reset_phandle = qemu_fdt_alloc_phandle(ms->fdt);
+    nodename_reset = g_strdup_printf("/reset@%" PRIx64,
+                                     vms->memmap[VIRT_RESET_FAKE].base);
+    qemu_fdt_add_subnode(ms->fdt, nodename_reset);
+    qemu_fdt_setprop_string(ms->fdt, nodename_reset,
+                            "compatible", "snps,dw-low-reset");
+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename_reset, "reg",
+                                 2, vms->memmap[VIRT_RESET_FAKE].base,
+                                 2, vms->memmap[VIRT_RESET_FAKE].size);
+    qemu_fdt_setprop_cell(ms->fdt, nodename_reset, "#reset-cells", 0x1);
+    qemu_fdt_setprop_cell(ms->fdt, nodename_reset, "phandle", reset_phandle);
+    sysmem2 =  g_new(MemoryRegion, 1);
+    memory_region_init_ram(sysmem2, NULL, "reset",
+                           vms->memmap[VIRT_RESET_FAKE].size, NULL);
+    memory_region_add_subregion(sysmem,
+                                vms->memmap[VIRT_RESET_FAKE].base, sysmem2);
+
+    clk_phandle = qemu_fdt_alloc_phandle(ms->fdt);
+
+    qemu_fdt_add_subnode(ms->fdt, "/mclk");
+    qemu_fdt_setprop_string(ms->fdt, "/mclk", "compatible", "fixed-clock");
+    qemu_fdt_setprop_cell(ms->fdt, "/mclk", "#clock-cells", 0x0);
+    qemu_fdt_setprop_cell(ms->fdt, "/mclk", "clock-frequency", 24000);
+    qemu_fdt_setprop_string(ms->fdt, "/mclk", "clock-output-names", "bobsclk");
+    qemu_fdt_setprop_cell(ms->fdt, "/mclk", "phandle", clk_phandle);
+
+    nodename_i2c_master = g_strdup_printf("/i2c@%" PRIx64,
+                                          vms->memmap[VIRT_I2C].base);
+    qemu_fdt_add_subnode(ms->fdt, nodename_i2c_master);
+    qemu_fdt_setprop_string(ms->fdt, nodename_i2c_master,
+                            "compatible",  "aspeed,ast2600-i2c-bus");
+    qemu_fdt_setprop_cells(ms->fdt, nodename_i2c_master, "multi-master");
+    qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "#size-cells", 0);
+    qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "#address-cells", 1);
+    qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "clocks", clk_phandle);
+    qemu_fdt_setprop_string(ms->fdt, nodename_i2c_master,
+                            "clock-names", "bobsclk");
+    qemu_fdt_setprop(ms->fdt, nodename_i2c_master, "mctp-controller", NULL, 0);
+    qemu_fdt_setprop_cells(ms->fdt, nodename_i2c_master,
+                           "interrupts", GIC_FDT_IRQ_TYPE_SPI,
+                           vms->irqmap[VIRT_I2C], GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+    /* Offset to the first bus is 0x80, next one at 0x100 etc */
+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename_i2c_master, "reg",
+                                 2, vms->memmap[VIRT_I2C].base + 0x80,
+                                 2, 0x80);
+    qemu_fdt_setprop_cells(ms->fdt, nodename_i2c_master,
+                           "resets", reset_phandle,  0);
+
+    nodename_i2c_sub = g_strdup_printf("/i2c@%" PRIx64 "/mctp@%x",
+                                       vms->memmap[VIRT_I2C].base, 0x50);
+    qemu_fdt_add_subnode(ms->fdt, nodename_i2c_sub);
+    qemu_fdt_setprop_string(ms->fdt, nodename_i2c_sub,
+                            "compatible",  "mctp-i2c-controller");
+    qemu_fdt_setprop_sized_cells(ms->fdt, nodename_i2c_sub,
+                                 "reg", 1, 0x50 | 0x40000000);
+}
+
 static void machvirt_init(MachineState *machine)
 {
     VirtMachineState *vms = VIRT_MACHINE(machine);
@@ -2554,6 +2638,8 @@ static void machvirt_init(MachineState *machine)
     if (vms->secure && !vmc->no_secure_gpio) {
         create_gpio_devices(vms, VIRT_SECURE_GPIO, secure_sysmem);
     }
+
+    create_mctp(machine);
 
      /* connect powerdown request */
      vms->powerdown_notifier.notify = virt_powerdown_req;
