@@ -11,6 +11,7 @@ typedef struct CXLUpstreamPort {
 
     /*< public >*/
     CXLComponentState cxl_cstate;
+    CXLCCI mctpcci;
     DOECap doe_cdat;
     uint64_t sn;
 } CXLUpstreamPort;
