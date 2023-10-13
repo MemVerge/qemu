@@ -440,6 +440,7 @@ struct CXLType3Dev {
 
     /* DOE */
     DOECap doe_cdat;
+    DOECap doe_comp;
 
     /* Error injection */
     CXLErrorList error_list;

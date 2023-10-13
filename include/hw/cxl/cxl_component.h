@@ -224,6 +224,7 @@ typedef struct cxl_component {
     };
 
     CDATObject cdat;
+    CXLCompObject compliance;
 } CXLComponentState;
 
 void cxl_component_register_block_init(Object *obj,
