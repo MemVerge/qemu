@@ -281,6 +281,13 @@ int cxl_process_cci_message(CXLCCI *cci, uint8_t set, uint8_t cmd,
                             bool *bg_started);
 void cxl_initialize_t3_mctpcci(CXLCCI *cci, DeviceState *d, DeviceState *intf,
                                size_t payload_max);
+void cxl_initialize_t3_fm_owned_ld_mctpcci(CXLCCI *cci, DeviceState *d,
+                                           DeviceState *intf,
+                                           size_t payload_max);
+
+void cxl_initialize_t3_ld_cci(CXLCCI *cci, DeviceState *d,
+                              DeviceState *intf, size_t payload_max);
+
 void cxl_initialize_usp_mctpcci(CXLCCI *cci, DeviceState *d, DeviceState *intf,
                                 size_t payload_max);
 
@@ -402,6 +409,9 @@ struct CXLType3Dev {
     CXLDeviceState cxl_dstate;
     CXLCCI cci; /* Primary PCI mailbox CCI */
     CXLCCI oob_mctp_cci; /* Initialized only if targetted */
+    /* Always intialized as no way to know if a VDM might show up */
+    CXLCCI vdm_fm_owned_ld_mctp_cci;
+    CXLCCI ld0_cci;
 
     /* DOE */
     DOECap doe_cdat;
