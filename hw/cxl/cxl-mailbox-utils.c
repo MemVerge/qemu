@@ -80,6 +80,7 @@ enum {
         #define GET_POISON_LIST        0x0
         #define INJECT_POISON          0x1
         #define CLEAR_POISON           0x2
+        #define GET_SCAN_MEDIA_CAPABILITIES 0x3
     DCD_CONFIG  = 0x48,
         #define GET_DC_CONFIG          0x0
         #define GET_DYN_CAP_EXT_LIST   0x1
@@ -1251,6 +1252,56 @@ static CXLRetCode cmd_media_clear_poison(const struct cxl_cmd *cmd,
 }
 
 /*
+ * CXL r3.0 section 8.2.9.8.4.4: Get Scan Media Capabilities
+ */
+static CXLRetCode
+cmd_media_get_scan_media_capabilities(const struct cxl_cmd *cmd,
+                                      uint8_t *payload_in,
+                                      size_t len_in,
+                                      uint8_t *payload_out,
+                                      size_t *len_out,
+                                      CXLCCI *cci)
+{
+    struct get_scan_media_capabilities_pl {
+        uint64_t pa;
+        uint64_t length;
+    } QEMU_PACKED;
+
+    struct get_scan_media_capabilities_out_pl {
+        uint32_t estimated_runtime_ms;
+    } QEMU_PACKED;
+
+    CXLType3Dev *ct3d = CXL_TYPE3(cci->d);
+    CXLDeviceState *cxl_dstate = &ct3d->cxl_dstate;
+    struct get_scan_media_capabilities_pl *in = (void *)payload_in;
+    struct get_scan_media_capabilities_out_pl *out = (void *)payload_out;
+    uint64_t query_start;
+    uint64_t query_length;
+
+    query_start = ldq_le_p(&in->pa);
+    /* 64 byte alignment required */
+    if (query_start & 0x3f) {
+        return CXL_MBOX_INVALID_INPUT;
+    }
+    query_length = ldq_le_p(&in->length) * CXL_CACHE_LINE_SIZE;
+
+    if (query_start + query_length > cxl_dstate->static_mem_size) {
+        return CXL_MBOX_INVALID_PA;
+    }
+
+    /*
+     * Just use 400 nanosecond access/read latency + 100 ns for
+     * the cost of updating the poison list. For small enough
+     * chunks return at least 1 ms.
+     */
+    stl_le_p(&out->estimated_runtime_ms,
+             MAX(1, query_length * (0.0005L / 64)));
+
+    *len_out = sizeof(*out);
+    return CXL_MBOX_SUCCESS;
+}
+
+/*
  * CXL r3.0 section 8.2.9.8.9.1: Dynamic Capacity Configuration
  */
 static CXLRetCode cmd_dcd_get_dyn_cap_config(const struct cxl_cmd *cmd,
@@ -1679,6 +1730,9 @@ static const struct cxl_cmd cxl_cmd_set[256][256] = {
         cmd_media_inject_poison, 8, 0 },
     [MEDIA_AND_POISON][CLEAR_POISON] = { "MEDIA_AND_POISON_CLEAR_POISON",
         cmd_media_clear_poison, 72, 0 },
+    [MEDIA_AND_POISON][GET_SCAN_MEDIA_CAPABILITIES] = {
+        "MEDIA_AND_POISON_GET_SCAN_MEDIA_CAPABILITIES",
+        cmd_media_get_scan_media_capabilities, 16, 0 },
 };
 
 static const struct cxl_cmd cxl_cmd_set_dcd[256][256] = {
