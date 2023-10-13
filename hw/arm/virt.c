@@ -2326,7 +2326,7 @@ static void create_mctp(MachineState *ms)
     qemu_fdt_add_subnode(ms->fdt, nodename_i2c_master);
     qemu_fdt_setprop_string(ms->fdt, nodename_i2c_master,
                             "compatible",  "aspeed,ast2600-i2c-bus");
-    qemu_fdt_setprop_cells(ms->fdt, nodename_i2c_master, "multi-master");
+    qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "multi-master", 1);
     qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "#size-cells", 0);
     qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "#address-cells", 1);
     qemu_fdt_setprop_cell(ms->fdt, nodename_i2c_master, "clocks", clk_phandle);
