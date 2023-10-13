@@ -28,6 +28,7 @@
 #include "sysemu/numa.h"
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
+#include "hw/pci/spdm.h"
 
 #define DWORD_BYTE 4
 
@@ -393,6 +394,9 @@ static uint32_t ct3d_config_read(PCIDevice *pci_dev, uint32_t addr, int size)
         return val;
     } else if (pcie_doe_read_config(&ct3d->doe_comp, addr, size, &val)) {
         return val;
+    } else if (ct3d->spdm_port &&
+               pcie_doe_read_config(&ct3d->doe_spdm, addr, size, &val)) {
+        return val;
     }
 
     return pci_default_read_config(pci_dev, addr, size);
@@ -403,6 +407,9 @@ static void ct3d_config_write(PCIDevice *pci_dev, uint32_t addr, uint32_t val,
 {
     CXLType3Dev *ct3d = CXL_TYPE3(pci_dev);
 
+    if (ct3d->spdm_port) {
+        pcie_doe_write_config(&ct3d->doe_spdm, addr, val, size);
+    }
     pcie_doe_write_config(&ct3d->doe_cdat, addr, val, size);
     pcie_doe_write_config(&ct3d->doe_comp, addr, val, size);
     pci_default_write_config(pci_dev, addr, val, size);
@@ -794,6 +801,13 @@ static DOEProtocol doe_comp_prot[] = {
     {CXL_VENDOR_ID, CXL_DOE_COMPLIANCE, cxl_doe_compliance_rsp},
     { }
 };
+
+static DOEProtocol doe_spdm_prot[] = {
+    { PCI_VENDOR_ID_PCI_SIG, PCI_SIG_DOE_CMA, pcie_doe_spdm_rsp },
+    { PCI_VENDOR_ID_PCI_SIG, PCI_SIG_DOE_SECURED_CMA, pcie_doe_spdm_rsp },
+    { }
+};
+
 static void ct3_realize(PCIDevice *pci_dev, Error **errp)
 {
     CXLType3Dev *ct3d = CXL_TYPE3(pci_dev);
@@ -801,7 +815,7 @@ static void ct3_realize(PCIDevice *pci_dev, Error **errp)
     ComponentRegisters *regs = &cxl_cstate->crb;
     MemoryRegion *mr = &regs->component_registers;
     uint8_t *pci_conf = pci_dev->config;
-    unsigned short msix_num = 9;
+    unsigned short msix_num = 10;
     int i, rc;
 
     QTAILQ_INIT(&ct3d->error_list);
@@ -871,7 +885,13 @@ static void ct3_realize(PCIDevice *pci_dev, Error **errp)
     cxl_event_init(&ct3d->cxl_dstate, 2);
 
     pcie_doe_init(pci_dev, &ct3d->doe_comp, 0x1b0, doe_comp_prot, true, 8);
-
+    if (ct3d->spdm_port) {
+        pcie_doe_init(pci_dev, &ct3d->doe_spdm, 0x1d0, doe_spdm_prot, true, 9);
+        ct3d->doe_spdm.socket = spdm_sock_init(ct3d->spdm_port, errp);
+        if (ct3d->doe_spdm.socket < 0) {
+            goto err_release_cdat;
+        }
+    }
     return;
 
 err_release_cdat:
@@ -896,6 +916,7 @@ static void ct3_exit(PCIDevice *pci_dev)
 
     pcie_aer_exit(pci_dev);
     cxl_doe_cdat_release(cxl_cstate);
+    spdm_sock_fini(ct3d->doe_spdm.socket);
     g_free(regs->special_ops);
     if (ct3d->hostpmem) {
         address_space_destroy(&ct3d->hostpmem_as);
@@ -1084,6 +1105,7 @@ static Property ct3_props[] = {
                      HostMemoryBackend *),
     DEFINE_PROP_UINT64("sn", CXLType3Dev, sn, UI64_NULL),
     DEFINE_PROP_STRING("cdat", CXLType3Dev, cxl_cstate.cdat.filename),
+    DEFINE_PROP_UINT16("spdm", CXLType3Dev, spdm_port, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 
