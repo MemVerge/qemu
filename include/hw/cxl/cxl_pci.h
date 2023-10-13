@@ -138,12 +138,10 @@ QEMU_BUILD_BUG_ON(sizeof(CXLDVSECPortFlexBus) != 0x14);
 typedef struct CXLDVSECRegisterLocator {
     DVSECHeader hdr;
     uint16_t rsvd;
-    uint32_t reg0_base_lo;
-    uint32_t reg0_base_hi;
-    uint32_t reg1_base_lo;
-    uint32_t reg1_base_hi;
-    uint32_t reg2_base_lo;
-    uint32_t reg2_base_hi;
+    struct {
+            uint32_t lo;
+            uint32_t hi;
+    } reg_base[3];
 } CXLDVSECRegisterLocator;
 QEMU_BUILD_BUG_ON(sizeof(CXLDVSECRegisterLocator) != 0x24);
 
