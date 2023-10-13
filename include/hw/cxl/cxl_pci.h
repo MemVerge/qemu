@@ -143,7 +143,7 @@ typedef struct CXLDVSECRegisterLocator {
             uint32_t lo;
             uint32_t hi;
     } reg_base[4];
-} CXLDVSECRegisterLocator;
+} QEMU_PACKED CXLDVSECRegisterLocator;
 QEMU_BUILD_BUG_ON(sizeof(CXLDVSECRegisterLocator) != 0x2C);
 
 /* BAR Equivalence Indicator */

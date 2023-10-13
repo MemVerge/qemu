@@ -27,12 +27,13 @@
 #include "hw/sysbus.h"
 #include "qapi/error.h"
 #include "hw/cxl/cxl.h"
+#include "hw/cxl/cxl_pci.h"
 
 #define CXL_ROOT_PORT_DID 0x7075
 
-#define CXL_RP_MSI_OFFSET               0x60
-#define CXL_RP_MSI_SUPPORTED_FLAGS      PCI_MSI_FLAGS_MASKBIT
-#define CXL_RP_MSI_NR_VECTOR            2
+#define CXL_RP_MSI_OFFSET               0x50
+#define CXL_RP_MSI_SUPPORTED_FLAGS (PCI_MSI_FLAGS_MASKBIT | PCI_MSI_FLAGS_64BIT)
+#define CXL_RP_MSI_NR_VECTOR            4
 
 /* Copied from the gen root port which we derive */
 #define GEN_PCIE_ROOT_PORT_AER_OFFSET 0x100
@@ -46,6 +47,10 @@ typedef struct CXLRootPort {
     PCIESlot parent_obj;
 
     CXLComponentState cxl_cstate;
+
+    MemoryRegion bar;
+    CPMUState cpmu;
+    MemoryRegion cpmu_registers;
     PCIResReserve res_reserve;
 } CXLRootPort;
 
@@ -68,10 +73,10 @@ static uint8_t cxl_rp_aer_vector(const PCIDevice *d)
     case 8:
     case 16:
     case 32:
+        return 3;
     default:
         break;
     }
-    abort();
     return 0;
 }
 
@@ -105,7 +110,9 @@ static void latch_registers(CXLRootPort *crp)
 
 static void build_dvsecs(CXLComponentState *cxl)
 {
+    CXLDVSECRegisterLocator *regloc_dvsec;
     uint8_t *dvsec;
+    int i;
 
     dvsec = (uint8_t *)&(CXLDVSECPortExt){ 0 };
     cxl_component_create_dvsec(cxl, CXL2_ROOT_PORT,
@@ -133,14 +140,20 @@ static void build_dvsecs(CXLComponentState *cxl)
                                PCIE_FLEXBUS_PORT_DVSEC,
                                PCIE_FLEXBUS_PORT_DVSEC_REVID_2_0, dvsec);
 
-    dvsec = (uint8_t *)&(CXLDVSECRegisterLocator){
+    regloc_dvsec = &(CXLDVSECRegisterLocator){
         .rsvd         = 0,
         .reg_base[0].lo = RBI_COMPONENT_REG | CXL_COMPONENT_REG_BAR_IDX,
         .reg_base[0].hi = 0,
     };
+    for (i = 0; i < 1; i++) {
+        regloc_dvsec->reg_base[1 + i].lo =
+            QEMU_ALIGN_UP(i * (1 << 16) + CXL2_COMPONENT_BLOCK_SIZE, 1 << 16) |
+            RBI_CXL_CPMU_REG | 0; /* Port so only one 64 bit bar */
+        regloc_dvsec->reg_base[1 + i].hi = 0;
+    }
     cxl_component_create_dvsec(cxl, CXL2_ROOT_PORT,
                                REG_LOC_DVSEC_LENGTH, REG_LOC_DVSEC,
-                               REG_LOC_DVSEC_REVID, dvsec);
+                               REG_LOC_DVSEC_REVID, (uint8_t *)regloc_dvsec);
 }
 
 static void cxl_rp_realize(DeviceState *dev, Error **errp)
@@ -180,10 +193,23 @@ static void cxl_rp_realize(DeviceState *dev, Error **errp)
     cxl_component_register_block_init(OBJECT(pci_dev), cxl_cstate,
                                       TYPE_CXL_ROOT_PORT);
 
-    pci_register_bar(pci_dev, CXL_COMPONENT_REG_BAR_IDX,
+
+    //going to be a bit tricky.
+    memory_region_init(&crp->bar, OBJECT(pci_dev), "registers", (2 << 16));
+    memory_region_add_subregion(&crp->bar, 0, component_bar);
+    //Deal with moving vectors at somepoint in the future.
+    cxl_cpmu_register_block_init2(OBJECT(pci_dev), &crp->cpmu,
+                                  &crp->cpmu_registers, 0, 2);
+    /* Need to force 64k Alignment in the bar */
+    memory_region_add_subregion(&crp->bar,
+                                QEMU_ALIGN_UP((1 << 16),
+                                              CXL2_COMPONENT_BLOCK_SIZE),
+                                &crp->cpmu_registers);
+
+    pci_register_bar(pci_dev, 0,
                      PCI_BASE_ADDRESS_SPACE_MEMORY |
-                         PCI_BASE_ADDRESS_MEM_TYPE_64,
-                     component_bar);
+                     PCI_BASE_ADDRESS_MEM_TYPE_64,
+                     &crp->bar);
 }
 
 static void cxl_rp_reset_hold(Object *obj)
@@ -267,7 +293,6 @@ static void cxl_rp_write_config(PCIDevice *d, uint32_t address, uint32_t val,
     pcie_cap_slot_write_config(d, slt_ctl, slt_sta, address, val, len);
     pcie_aer_write_config(d, address, val, len);
     pcie_aer_root_write_config(d, address, val, len, root_cmd);
-
     cxl_rp_dvsec_write_config(d, address, val, len);
 }
 
@@ -292,6 +317,7 @@ static void cxl_root_port_class_init(ObjectClass *oc, void *data)
     rpc->aer_offset = GEN_PCIE_ROOT_PORT_AER_OFFSET;
     rpc->acs_offset = GEN_PCIE_ROOT_PORT_ACS_OFFSET;
     rpc->aer_vector = cxl_rp_aer_vector;
+    rpc->ssvid_offset = 0x70;
     rpc->interrupts_init = cxl_rp_interrupts_init;
     rpc->interrupts_uninit = cxl_rp_interrupts_uninit;
 
