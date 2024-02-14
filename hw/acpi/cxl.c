@@ -228,11 +228,27 @@ static Aml *__build_cxl_osc_method(bool fw_first)
     Aml *method, *if_uuid, *else_uuid, *if_arg1_not_1, *if_cxl, *if_caps_masked;
     Aml *a_ctrl = aml_local(0);
     Aml *a_cdw1 = aml_name("CDW1");
+    Aml *cxl_osc_mem = aml_local(1);
     Aml *cxl_ctrl = aml_local(2);
+
+    Aml *field;
 
     method = aml_method("_OSC", 4, AML_NOTSERIALIZED);
     /* CDW1 is used for the return value so is present whether or not a match occurs */
     aml_append(method, aml_create_dword_field(aml_arg(3), aml_int(0), "CDW1"));
+    if (acpi_ghes_present()) {
+        aml_append(method, aml_store(aml_name("COSC"), cxl_osc_mem));
+        aml_append(method, aml_operation_region("CXLA", AML_SYSTEM_MEMORY,
+                                                cxl_osc_mem, 64));
+
+        field = aml_field("CXLA", AML_DWORD_ACC, AML_NOLOCK, AML_PRESERVE);
+        aml_append(field, aml_named_field("ODW1", 32));
+        aml_append(field, aml_named_field("ODW2", 32));
+        aml_append(method, field);
+        /* Store the value for querying later */
+        aml_append(method, aml_store(aml_name("CTRL"), aml_name("ODW1")));
+        aml_append(method, aml_store(aml_name("CTRC"), aml_name("ODW2")));
+    }
 
     /*
      * Generate shared section between:

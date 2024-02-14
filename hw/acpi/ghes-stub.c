@@ -20,3 +20,13 @@ bool acpi_ghes_present(void)
 {
     return false;
 }
+
+bool acpi_fw_first_pci(void)
+{
+    return false;
+}
+
+bool acpi_fw_first_cxl_mem(void)
+{
+    return false;
+}

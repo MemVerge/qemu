@@ -462,3 +462,47 @@ bool acpi_ghes_present(void)
     ags = &acpi_ged_state->ghes_state;
     return ags->present;
 }
+
+bool acpi_fw_first_pci(void)
+{
+    if (acpi_ghes_present()) {
+        AcpiGhesState *ags =
+            &ACPI_GED(object_resolve_path_type("", TYPE_ACPI_GED,
+                                               NULL))->ghes_state;
+        uint32_t pci_osc;
+
+        cpu_physical_memory_read(le64_to_cpu(ags->pci_osc_addr_le),
+                                 &pci_osc, sizeof(pci_osc));
+        if (pci_osc == 0) {
+            printf("OSC not called yet\n");
+            return true; /* OSC not run yet */
+        }
+        printf("OSC has been called %x\n", pci_osc);
+        return !(pci_osc & (1 << 3));
+    }
+    return false;
+}
+
+bool acpi_fw_first_cxl_mem(void)
+{
+    if (!acpi_fw_first_pci()) {
+        return false;
+    }
+    if (acpi_ghes_present()) {
+        AcpiGhesState *ags =
+            &ACPI_GED(object_resolve_path_type("", TYPE_ACPI_GED,
+                                               NULL))->ghes_state;
+        uint32_t cxl_osc;
+
+        cpu_physical_memory_read(le64_to_cpu(ags->pci_osc_addr_le) +
+                                 sizeof(uint32_t),
+                                 &cxl_osc, sizeof(cxl_osc));
+        if (cxl_osc == 0) {
+            printf("CXL OSC not called yet or memory error not requested\n");
+            return true; /* OSC not run yet */
+        }
+        printf("OSC has been called %x\n", cxl_osc);
+        return !(cxl_osc & (1 << 0));
+    }
+    return false;
+}
