@@ -478,7 +478,8 @@ void cxl_component_create_dvsec(CXLComponentState *cxl,
 
     /* Update state for future DVSEC additions */
     range_init_nofail(&cxl->dvsecs[type], cxl->dvsec_offset, length);
-    cxl->dvsec_offset += length;
+#define ALIGN(a, b) (((a) + ((b) - 1)) & ~((b) - 1))
+    cxl->dvsec_offset += ALIGN(length, 4);
 }
 
 /* CXL r3.1 Section 8.2.4.20.7 CXL HDM Decoder n Control Register */

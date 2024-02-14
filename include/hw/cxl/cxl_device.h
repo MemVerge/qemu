@@ -488,6 +488,18 @@ typedef struct CXLDCDRegion {
     unsigned long *blk_bitmap;
 } CXLDCDRegion;
 
+typedef struct CXLFMAPIInitiateDCAdd {
+    uint16_t host_id;
+    uint8_t selection_policy;
+    uint8_t region;
+    uint64_t length;
+    uint8_t tag[0x10];
+    uint32_t count;
+    CXLDCExtentRaw extents[];
+} QEMU_PACKED CXLFMAPIInitiateDCAdd;
+int fmapi_cxl_process_dynamic_capacity(CXLType3Dev *dcd,
+                                       CXLFMAPIInitiateDCAdd *req);
+
 struct CXLType3Dev {
     /* Private */
     PCIDevice parent_obj;
