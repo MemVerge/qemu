@@ -97,6 +97,13 @@ enum {
         #define MANAGEMENT_COMMAND     0x0
     MHD = 0x55,
         #define GET_MHD_INFO 0x0
+    DCD_MANAGEMENT = 0x56
+        #define GET_DCD_INFO 0x0
+        #define GET_HOST_DC_REGION_CONFIG 0x1
+        #define SET_DC_REGION_CONFIG 0x2 /* Why not host? huh...*/
+        #define GET_DC_REGION_EXTENT_LIST 0x3
+        #define INITIATE_DC_ADD 0x4
+        #define INITIATE_DC_RELEASE 0x5
 };
 
 /* CCI Message Format CXL r3.1 Figure 7-19 */
@@ -605,6 +612,176 @@ static CXLRetCode cmd_get_physical_port_state(const struct cxl_cmd *cmd,
 
     pl_size = sizeof(*out) + sizeof(*out->ports) * in->num_ports;
     *len_out = pl_size;
+
+    return CXL_MBOX_SUCCESS;
+}
+
+/* CXL r3.0 section 7.6.7.6.1: Get DCD Info (Opcode 5600h) */
+static CXLRetCode cmd_dcd_mgmt_get_dcd_info(const struct cxl_cmd *cmd,
+                                            uint8_t *payload_in,
+                                            size_t len_in,
+                                            uint8_t *payload_out,
+                                            size_t *len_out,
+                                            CXLCCI *cci)
+{
+    CXLType3Dev *ct3d = CXL_TYPE3(cci->d); /* Only supported on type 3 */
+    struct {
+        uint8_t num_sup_hosts;
+        uint8_t num_sup_regions;
+        uint8_t resv[2];
+        uint16_t add_selection_policies;
+        uint8_t resv2[2];
+        uint16_t release_selection_policies;
+        uint8_t sanitize_on_release_bm;
+        uint8_t resv3;
+        uint64_t total_dc; /* Not aligned */
+        uint64_t region_supported_blk_size_mask[8];
+    } QEMU_PACKED *dcd_info;
+    int i;
+
+    QEMU_BUILD_BUG_ON(sizeof(*dcd_info) != 0x54);
+
+    dcd_info = (void *)payload_out;
+    *dcd_info = (typeof(*dcd_info)) {
+        .num_sup_hosts = 1,
+        .num_sup_regions = ct3d->dc.num_regions,
+        .add_selection_policies = 0x4, /* Prescriptive only for now */
+        .release_selection_policies = 0x2, /* Prescriptive only for now */
+        .sanitize_on_release_bm = 0, /* None of them configurable yet */
+        .total_dc = ct3d->dc.total_capacity / (256 * MiB), /* Mult of 256 MiB */
+    };
+    for (i = 0; i < ct3d->dc.num_regions; i++) {
+        dcd_info->region_supported_blk_size_mask[i] = 2 * MiB;
+    }
+    /* TODO: fill it in */
+    *len_out = sizeof(*dcd_info);
+
+    return CXL_MBOX_SUCCESS;
+}
+
+/*
+ * CXL r3.0 section 7.6.7.6.2:
+ * Get Host DC Region Configuration (Opcode 5601h)
+ */
+static CXLRetCode cmd_dcd_mgmt_get_dc_region_config(const struct cxl_cmd *cmd,
+                                                    uint8_t *payload_in,
+                                                    size_t len_in,
+                                                    uint8_t *payload_out,
+                                                    size_t *len_out,
+                                                    CXLCCI *cci)
+{
+    struct {
+        uint16_t host_id;
+        uint8_t region_count;
+        uint8_t start_region;
+    } QEMU_PACKED *dc_region_config_req = (void *)payload_in;
+
+    struct region_conf {
+        uint64_t base;
+        uint64_t decode_len;
+        uint64_t len;
+        uint64_t block_size;
+        uint8_t flags;
+#define REGION_CONF_FLAGS_NONVOL BIT(2)
+#define REGION_CONF_FLAGS_SHARABLE BIT(3)
+#define REGION_CONF_FLAGS_HW_MANAGED_COHERENCY BIT(4)
+#define REGION_CONF_FLAGS_IMDEF_DCD_MANAGEMENT BIT(5)
+        uint8_t resv[3];
+        uint8_t flags2;
+#define REGION_CONF_FLAGS2_SANITIZE_ON_RELEASE BIT(0)
+        uint8_t resv2[3];
+    } QEMU_PACKED;
+
+    struct {
+        uint8_t host_id;
+        uint8_t num_avail_regions;
+        uint8_t region_count;
+        struct region_conf regions[];
+    } QEMU_PACKED *dc_region_config = (void *)payload_out;
+
+    dc_region_config->region_count = dc_region_config_req->region_count;
+    /* Fill in the rest */
+    *len_out = sizeof(*dc_region_config);
+    return CXL_MBOX_SUCCESS;
+}
+
+/*
+ * CXL r3.0 section 7.6.7.6.4:
+ * Get DC Region Extent Lists (Opcode 5604h)
+ */
+static CXLRetCode cmd_dcd_mgmt_get_dc_region_extents(const struct cxl_cmd *cmd,
+                                                     uint8_t *payload_in,
+                                                     size_t len_in,
+                                                     uint8_t *payload_out,
+                                                     size_t *len_out,
+                                                     CXLCCI *cci)
+{
+    struct {
+        uint16_t host_id;
+        uint8_t resv[2];
+        uint32_t count;
+        uint32_t start;
+    } QEMU_PACKED *get_extent_list_req = (void *)payload_in;
+    struct {
+        uint16_t host_id;
+        uint8_t resv[2];
+        uint32_t start;
+        uint32_t count;
+        uint32_t total;
+        uint32_t generation;
+        uint8_t resv2[4];
+        CXLDCDExtent extents[];
+    } QEMU_PACKED *extent_list = (void *)payload_out;
+
+    extent_list->host_id = get_extent_list_req->host_id;
+
+    return CXL_MBOX_SUCCESS;
+}
+
+/* CXL r3.0 Section 7.6.7.6.5: Initiate Dynamic Capacity Add (Opcode 5605h) */
+static CXLRetCode cmd_dcd_mgmt_initiate_dc_add(const struct cxl_cmd *cmd,
+                                               uint8_t *payload_in,
+                                               size_t len_in,
+                                               uint8_t *payload_out,
+                                               size_t *len_out,
+                                               CXLCCI *cci)
+{
+    CXLType3Dev *ct3d = CXL_TYPE3(cci->d);
+    CXLFMAPIInitiateDCAdd *req = (void *)payload_in;
+
+    if (len_in < sizeof(CXLFMAPIInitiateDCAdd)) {
+        return CXL_MBOX_INVALID_INPUT;
+    }
+
+    fmapi_cxl_process_dynamic_capacity(ct3d, req);
+    *len_out = 0;
+
+    return CXL_MBOX_SUCCESS;
+}
+
+/*
+ * CXL r3.0 Section 7.6.7.6.6:
+ * Initiate Dynamic Capacity Release (Opcode 5606h)
+ */
+static CXLRetCode cmd_dcd_mgmt_initiate_dc_release(const struct cxl_cmd *cmd,
+                                                   uint8_t *payload_in,
+                                                   size_t len_in,
+                                                   uint8_t *payload_out,
+                                                   size_t *len_out,
+                                                   CXLCCI *cci)
+{
+    struct {
+        uint16_t host_id;
+        uint8_t flags;
+        uint8_t resv; /* Field missing in CXL r3.0 */
+        uint64_t lenght;
+        uint8_t tag[0x10];
+        uint32_t count;
+        CXLDCDExtent extents[];
+    } QEMU_PACKED *req = (void *)payload_in;
+
+    printf("TODO Release path %d\n", req->host_id);
+    *len_out = 0;
 
     return CXL_MBOX_SUCCESS;
 }
@@ -2339,6 +2516,16 @@ static const struct cxl_cmd cxl_cmd_set_t3_fm_owned_ld_mctp[256][256] = {
     [TIMESTAMP][GET] = { "TIMESTAMP_GET", cmd_timestamp_get, 0, 0 },
     [TUNNEL][MANAGEMENT_COMMAND] = { "TUNNEL_MANAGEMENT_COMMAND",
                                      cmd_tunnel_management_cmd, ~0, 0 },
+    [DCD_MANAGEMENT][GET_DCD_INFO] = { "GET_DCD_INFO",
+        cmd_dcd_mgmt_get_dcd_info, 0, 0 },
+    [DCD_MANAGEMENT][GET_HOST_DC_REGION_CONFIG] = { "GET_DCD_INFO",
+        cmd_dcd_mgmt_get_dc_region_config, 4, 0 },
+    [DCD_MANAGEMENT][GET_DC_REGION_EXTENT_LIST] = { "GET_DCD_EXTENT_LIST",
+        cmd_dcd_mgmt_get_dc_region_extents, ~0, 0 },
+    [DCD_MANAGEMENT][INITIATE_DC_ADD] = { "INITIATE_DC_ADD",
+        cmd_dcd_mgmt_initiate_dc_add, ~0, 0 },
+    [DCD_MANAGEMENT][INITIATE_DC_RELEASE] = { "INITIATE_DC_RELEASE",
+        cmd_dcd_mgmt_initiate_dc_release, ~0, 0 },
 };
 
 void cxl_initialize_t3_fm_owned_ld_mctpcci(CXLCCI *cci, DeviceState *d,

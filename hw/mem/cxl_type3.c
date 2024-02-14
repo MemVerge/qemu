@@ -1978,6 +1978,94 @@ static CXLDCExtent *cxl_dc_extent_exists(CXLDCExtentList *list,
     return NULL;
 }
 
+#define MEM_BLK_SIZE_MB 128
+
+static int cxl_process_dcd_req(CXLType3Dev *dcd, CXLDCEventType type,
+                               CXLDCDExtentList *extent_list,
+                               uint16_t hid,
+                               int num_extents,
+                               CXLDCExtentRaw *extents)
+{
+    uint8_t flags = 1 << CXL_EVENT_TYPE_INFO;
+    CXLEventDynamicCapacity dCap = {};
+    CXLEventRecordHdr *hdr = &dCap.hdr;
+    uint8_t enc_log;
+    int i, rc;
+
+    rc = ct3d_qmp_cxl_event_log_enc(CXL_EVENT_LOG_DYNCAP);
+    if (rc < 0) {
+        return -1;
+    }
+    enc_log = rc;
+
+    /*
+     * CXL r3.0 section 8.2.9.1.5: Dynamic Capacity Event Record
+     *
+     * All Dynamic Capacity event records shall set the Event Record Severity
+     * field in the Common Event Record Format to Informational Event. All
+     * Dynamic Capacity related events shall be logged in the Dynamic Capacity
+     * Event Log.
+     */
+    cxl_assign_event_header(hdr, &dynamic_capacity_uuid, flags, sizeof(dCap),
+                            cxl_device_get_timestamp(&dcd->cxl_dstate));
+
+    dCap.type = type;
+    stw_le_p(&dCap.host_id, hid);
+    /* only valid for DC_REGION_CONFIG_UPDATED event */
+    dCap.updated_region_id = 0;
+    for (i = 0; i < num_extents; i++) {
+        memcpy(&dCap.dynamic_capacity_extent, &extents[i],
+               sizeof(CXLDCExtentRaw));
+
+        if (extent_list) {
+            cxl_insert_extent_to_extent_list(extent_list,
+                                             extents[i].start_dpa,
+                                             extents[i].len,
+                                             extents[i].tag,
+                                             extents[i].shared_seq);
+        }
+
+        if (cxl_event_insert(&dcd->cxl_dstate, enc_log,
+                             (CXLEventRecordRaw *)&dCap)) {
+            cxl_event_irq_assert(dcd);
+        }
+    }
+
+    return 0;
+}
+
+/* DPA in here is DPA which is not true in the QMP version - Care needed */
+static int cxl_check_dc_extent(CXLType3Dev *dcd, uint8_t rid, uint64_t dpa,
+                               uint64_t len, uint64_t *min_block_size,
+                               Error **errp)
+{
+    /* Check alignment */
+    if (dpa % dcd->dc.regions[rid].block_size ||
+        len % dcd->dc.regions[rid].block_size) {
+        error_setg(errp, "dpa or len is not aligned to region block size");
+        return -1;
+    }
+
+    if (dpa < dcd->dc.regions[rid].base) {
+        error_setg(errp, "extent starts before targetted region base=%lx",
+                   dcd->dc.regions[rid].base);
+        return -1;
+    }
+
+    if (dpa + len >
+        dcd->dc.regions[rid].base +
+        dcd->dc.regions[rid].decode_len * 256 * MiB) {
+        error_setg(errp, "extent range is beyond the region end");
+        return -1;
+    }
+
+    if (min_block_size) {
+        *min_block_size = MIN(*min_block_size, dcd->dc.regions[rid].block_size);
+    }
+
+    return 0;
+}
+
 /*
  * The main function to process dynamic capacity event. Currently DC extents
  * add/release requests are processed.
@@ -2163,6 +2251,67 @@ static void qmp_cxl_process_dynamic_capacity(const char *path, CxlEventLog log,
             cxl_event_irq_assert(dcd);
         }
     }
+}
+
+int fmapi_cxl_process_dynamic_capacity(CXLType3Dev *dcd,
+                                       CXLFMAPIInitiateDCAdd *req)
+{
+    uint8_t rid;
+    int i, rc;
+    uint64_t block_size;
+    g_autofree unsigned long *blk_bitmap = NULL;
+
+    if (!dcd->dc.num_regions) {
+        error_setg(&error_warn, "No dynamic capacity support from the device");
+        return -1;
+    }
+
+    if (req->count == 0) {
+        error_setg(&error_warn, "No extents found in the command");
+        return -1;
+    }
+
+    rid = req->region;
+    if (rid >= dcd->dc.num_regions) {
+            error_setg(&error_warn, "region id is too large");
+            return -1;
+    }
+    block_size = dcd->dc.regions[rid].block_size;
+
+    /* Check individual extent validity and establish minimum blk size */
+    for (i = 0; i < req->count; i++) {
+        CXLDCExtentRaw *ext = &req->extents[i];
+
+        rc = cxl_check_dc_extent(dcd, rid, ext->start_dpa, ext->len,
+                                 NULL, &error_warn);
+        if (rc) {
+            return rc;
+        }
+    }
+
+    /* Check extent list does not contain overlapping extents */
+    blk_bitmap = bitmap_new(dcd->dc.regions[rid].decode_len / block_size);
+    for (i = 0; i < req->count; i++) {
+        CXLDCExtentRaw *ext = &req->extents[i];
+        uint64_t bm_ext_start, bm_ext_len;
+
+        bm_ext_start = (ext->start_dpa - dcd->dc.regions[rid].base) /
+            block_size;
+        bm_ext_len = ext->len / block_size;
+
+        /* No duplicate or overlapped extents are allowed */
+        if (test_any_bits_set(blk_bitmap, bm_ext_start, bm_ext_len)) {
+            error_setg(&error_warn,
+                       "duplicate or overlapped extents are detected");
+            return -1;
+        }
+        bitmap_set(blk_bitmap, bm_ext_start, bm_ext_len);
+    }
+
+    return cxl_process_dcd_req(dcd, DC_EVENT_ADD_CAPACITY,
+                               &dcd->dc.extents_pending_to_add,
+                               req->host_id, req->count, req->extents);
+
 }
 
 void qmp_cxl_add_dynamic_capacity(const char *path, uint8_t region_id,
