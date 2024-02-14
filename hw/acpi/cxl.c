@@ -27,6 +27,7 @@
 #include "hw/acpi/aml-build.h"
 #include "hw/acpi/bios-linker-loader.h"
 #include "hw/acpi/cxl.h"
+#include "hw/acpi/ghes.h"
 #include "qapi/error.h"
 #include "qemu/uuid.h"
 
@@ -222,11 +223,12 @@ void cxl_build_cedt(GArray *table_offsets, GArray *table_data,
     acpi_table_end(linker, &table);
 }
 
-static Aml *__build_cxl_osc_method(void)
+static Aml *__build_cxl_osc_method(bool fw_first)
 {
     Aml *method, *if_uuid, *else_uuid, *if_arg1_not_1, *if_cxl, *if_caps_masked;
     Aml *a_ctrl = aml_local(0);
     Aml *a_cdw1 = aml_name("CDW1");
+    Aml *cxl_ctrl = aml_local(2);
 
     method = aml_method("_OSC", 4, AML_NOTSERIALIZED);
     /* CDW1 is used for the return value so is present whether or not a match occurs */
@@ -260,7 +262,11 @@ static Aml *__build_cxl_osc_method(void)
      * Allows OS control for all 5 features:
      * PCIeHotplug SHPCHotplug PME AER PCIeCapability
      */
-    aml_append(if_uuid, aml_and(a_ctrl, aml_int(0x1F), a_ctrl));
+    if (fw_first) {
+        aml_append(if_uuid, aml_and(a_ctrl, aml_int(0x17), a_ctrl));
+    } else {
+        aml_append(if_uuid, aml_and(a_ctrl, aml_int(0x1F), a_ctrl));
+    }
 
     /*
      * Check _OSC revision.
@@ -290,6 +296,23 @@ static Aml *__build_cxl_osc_method(void)
     aml_append(if_cxl, aml_create_dword_field(aml_arg(3), aml_int(12), "CDW4"));
     /* CXL capabilities */
     aml_append(if_cxl, aml_create_dword_field(aml_arg(3), aml_int(16), "CDW5"));
+
+    aml_append(if_cxl, aml_store(aml_name("CDW5"), cxl_ctrl));
+    if (fw_first) {
+        aml_append(if_cxl, aml_and(cxl_ctrl, aml_int(0x0), cxl_ctrl));
+    } else {
+        /* Only allow CXL Memory Error Reporting */
+        aml_append(if_cxl, aml_and(cxl_ctrl, aml_int(0x1), cxl_ctrl));
+    }
+
+    if_caps_masked = aml_if(aml_lnot(aml_equal(aml_name("CDW5"), cxl_ctrl)));
+
+    /* Capability bits were masked */
+    aml_append(if_caps_masked, aml_or(a_cdw1, aml_int(0x10), a_cdw1));
+    aml_append(if_cxl, if_caps_masked);
+
+    aml_append(if_cxl, aml_store(cxl_ctrl, aml_name("CDW5")));
+
     aml_append(if_cxl, aml_store(aml_name("CDW4"), aml_name("SUPC")));
     aml_append(if_cxl, aml_store(aml_name("CDW5"), aml_name("CTRC")));
 
@@ -316,11 +339,11 @@ static Aml *__build_cxl_osc_method(void)
     return method;
 }
 
-void build_cxl_osc_method(Aml *dev)
+void build_cxl_osc_method(Aml *dev, bool fw_first)
 {
     aml_append(dev, aml_name_decl("SUPP", aml_int(0)));
     aml_append(dev, aml_name_decl("CTRL", aml_int(0)));
     aml_append(dev, aml_name_decl("SUPC", aml_int(0)));
     aml_append(dev, aml_name_decl("CTRC", aml_int(0)));
-    aml_append(dev, __build_cxl_osc_method());
+    aml_append(dev, __build_cxl_osc_method(fw_first));
 }

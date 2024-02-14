@@ -166,6 +166,7 @@ static Property gpex_host_properties[] = {
                        gpex_cfg.mmio64.base, 0),
     DEFINE_PROP_SIZE(PCI_HOST_ABOVE_4G_MMIO_SIZE, GPEXHost,
                      gpex_cfg.mmio64.size, 0),
+    DEFINE_PROP_BOOL("fw_first_ras", GPEXHost, gpex_cfg.fw_first_ras, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
