@@ -2864,6 +2864,20 @@ static void virt_set_ras(Object *obj, bool value, Error **errp)
     vms->ras = value;
 }
 
+static bool virt_get_fw_first_ras(Object *obj, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    return vms->fw_first_ras;
+}
+
+static void virt_set_fw_first_ras(Object *obj, bool value, Error **errp)
+{
+    VirtMachineState *vms = VIRT_MACHINE(obj);
+
+    vms->fw_first_ras = value;
+}
+
 static bool virt_get_mte(Object *obj, Error **errp)
 {
     VirtMachineState *vms = VIRT_MACHINE(obj);
@@ -3399,6 +3413,12 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     object_class_property_set_description(oc, "ras",
                                           "Set on/off to enable/disable reporting host memory errors "
                                           "to a KVM guest using ACPI and guest external abort exceptions");
+
+    object_class_property_add_bool(oc, "fw-first-ras", virt_get_fw_first_ras,
+                                   virt_set_fw_first_ras);
+    object_class_property_set_description(oc, "fw-first-ras",
+                                          "Set on/off to control PCI/CXL _OSC allow the guest to"
+                                          "obtain permission to do native handling of AER and CXL errors");
 
     object_class_property_add_bool(oc, "mte", virt_get_mte, virt_set_mte);
     object_class_property_set_description(oc, "mte",
