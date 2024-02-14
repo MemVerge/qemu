@@ -31,7 +31,7 @@
 #define PCIE_CXL3_FLEXBUS_PORT_DVSEC_LENGTH 0x20
 #define PCIE_CXL3_FLEXBUS_PORT_DVSEC_REVID  2
 
-#define REG_LOC_DVSEC_LENGTH 0x24
+#define REG_LOC_DVSEC_LENGTH 0x2c
 #define REG_LOC_DVSEC_REVID  0
 
 enum {
@@ -170,9 +170,9 @@ typedef struct CXLDVSECRegisterLocator {
     struct {
             uint32_t lo;
             uint32_t hi;
-    } reg_base[3];
+    } reg_base[4];
 } CXLDVSECRegisterLocator;
-QEMU_BUILD_BUG_ON(sizeof(CXLDVSECRegisterLocator) != 0x24);
+QEMU_BUILD_BUG_ON(sizeof(CXLDVSECRegisterLocator) != 0x2C);
 
 /* BAR Equivalence Indicator */
 #define BEI_BAR_10H 0
@@ -187,5 +187,6 @@ QEMU_BUILD_BUG_ON(sizeof(CXLDVSECRegisterLocator) != 0x24);
 #define RBI_COMPONENT_REG  (1 << 8)
 #define RBI_BAR_VIRT_ACL   (2 << 8)
 #define RBI_CXL_DEVICE_REG (3 << 8)
+#define RBI_CXL_CPMU_REG   (4 << 8)
 
 #endif
