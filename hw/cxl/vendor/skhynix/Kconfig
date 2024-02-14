@@ -1,0 +1,4 @@
+config CXL_SKHYNIX_NIAGARA
+    bool
+    depends on CXL_MEM_DEVICE
+    default y if CXL_VENDOR
