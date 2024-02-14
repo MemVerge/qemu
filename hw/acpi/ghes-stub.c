@@ -19,6 +19,11 @@ int acpi_ghes_record_errors(uint8_t source_id, uint64_t physical_address)
 {
     return -1;
 }
+bool ghes_record_cxl_errors(PCIDevice *dev, PCIEAERErr *err,
+                            CXLError *cxl_err, uint32_t notify)
+{
+    return false;
+}
 
 bool acpi_ghes_present(void)
 {

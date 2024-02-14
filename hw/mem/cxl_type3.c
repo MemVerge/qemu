@@ -29,6 +29,8 @@
 #include "hw/cxl/cxl.h"
 #include "hw/pci/msix.h"
 #include "hw/pci/spdm.h"
+#include "hw/boards.h"
+#include "hw/acpi/ghes.h"
 
 #define DWORD_BYTE 4
 #define CXL_CAPACITY_MULTIPLIER   (256 * MiB)
@@ -1494,6 +1496,8 @@ void qmp_cxl_inject_uncorrectable_errors(const char *path,
                                          CXLUncorErrorRecordList *errors,
                                          Error **errp)
 {
+    MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     Object *obj = object_resolve_path(path, NULL);
     static PCIEAERErr err = {};
     CXLType3Dev *ct3d;
@@ -1579,7 +1583,16 @@ void qmp_cxl_inject_uncorrectable_errors(const char *path,
     }
 
     stl_le_p(reg_state + R_CXL_RAS_UNC_ERR_STATUS, unc_err);
-    pcie_aer_inject_error(PCI_DEVICE(obj), &err);
+    if (!acpi_fw_first_pci()) {
+        pcie_aer_inject_error(PCI_DEVICE(obj), &err);
+    } else {
+        ghes_record_cxl_errors(PCI_DEVICE(obj), &err,
+                               QTAILQ_FIRST(&ct3d->error_list),
+                               ACPI_GHES_NOTIFY_GPIO);
+        if (mc->set_error) {
+            mc->set_error();
+        }
+    }
 
     return;
 }
@@ -1587,6 +1600,8 @@ void qmp_cxl_inject_uncorrectable_errors(const char *path,
 void qmp_cxl_inject_correctable_error(const char *path, CxlCorErrorType type,
                                       Error **errp)
 {
+    MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     static PCIEAERErr err = {};
     Object *obj = object_resolve_path(path, NULL);
     CXLType3Dev *ct3d;
@@ -1624,8 +1639,15 @@ void qmp_cxl_inject_correctable_error(const char *path, CxlCorErrorType type,
 
     cor_err |= (1 << cxl_err_type);
     stl_le_p(reg_state + R_CXL_RAS_COR_ERR_STATUS, cor_err);
-
-    pcie_aer_inject_error(PCI_DEVICE(obj), &err);
+    if (!acpi_fw_first_pci()) {
+        pcie_aer_inject_error(PCI_DEVICE(obj), &err);
+    } else {
+        ghes_record_cxl_errors(PCI_DEVICE(obj), &err, NULL,
+                               ACPI_GHES_NOTIFY_GPIO);
+        if (mc->set_error) {
+            mc->set_error();
+        }
+    }
 }
 
 static void cxl_assign_event_header(CXLEventRecordHdr *hdr,
