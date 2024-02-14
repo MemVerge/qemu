@@ -2002,6 +2002,8 @@ int cxl_process_cci_message(CXLCCI *cci, uint8_t set, uint8_t cmd,
     int ret;
     const struct cxl_cmd *cxl_cmd;
     opcode_handler h;
+    CXLDeviceState *cxl_dstate = &CXL_TYPE3(cci->intf)->cxl_dstate;
+
 
     *len_out = 0;
     cxl_cmd = &cci->cxl_cmd_set[set][cmd];
@@ -2022,8 +2024,8 @@ int cxl_process_cci_message(CXLCCI *cci, uint8_t set, uint8_t cmd,
         return CXL_MBOX_BUSY;
     }
 
-    /* forbid any selected commands while overwriting */
-    if (sanitize_running(cci)) {
+    /* forbid any selected commands while the media is disabled */
+    if (cxl_dev_media_disabled(cxl_dstate)) {
         if (h == cmd_events_get_records ||
             h == cmd_ccls_get_partition_info ||
             h == cmd_ccls_set_lsa ||
