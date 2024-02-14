@@ -1245,6 +1245,7 @@ MemTxResult cxl_type3_read(PCIDevice *d, hwaddr host_addr, uint64_t *data,
                            unsigned size, MemTxAttrs attrs)
 {
     CXLType3Dev *ct3d = CXL_TYPE3(d);
+    CXLType3Class *cvc = CXL_TYPE3_GET_CLASS(ct3d);
     uint64_t dpa_offset = 0;
     AddressSpace *as = NULL;
     int res;
@@ -1252,6 +1253,11 @@ MemTxResult cxl_type3_read(PCIDevice *d, hwaddr host_addr, uint64_t *data,
     res = cxl_type3_hpa_to_as_and_dpa(ct3d, host_addr, size,
                                       &as, &dpa_offset);
     if (res) {
+        return MEMTX_ERROR;
+    }
+
+    if (cvc->mhd_access_valid &&
+        !cvc->mhd_access_valid(d, dpa_offset, size)) {
         return MEMTX_ERROR;
     }
 
@@ -1267,6 +1273,7 @@ MemTxResult cxl_type3_write(PCIDevice *d, hwaddr host_addr, uint64_t data,
                             unsigned size, MemTxAttrs attrs)
 {
     CXLType3Dev *ct3d = CXL_TYPE3(d);
+    CXLType3Class *cvc = CXL_TYPE3_GET_CLASS(ct3d);
     uint64_t dpa_offset = 0;
     AddressSpace *as = NULL;
     int res;
@@ -1274,6 +1281,11 @@ MemTxResult cxl_type3_write(PCIDevice *d, hwaddr host_addr, uint64_t data,
     res = cxl_type3_hpa_to_as_and_dpa(ct3d, host_addr, size,
                                       &as, &dpa_offset);
     if (res) {
+        return MEMTX_ERROR;
+    }
+
+    if (cvc->mhd_access_valid &&
+        !cvc->mhd_access_valid(d, dpa_offset, size)) {
         return MEMTX_ERROR;
     }
 
@@ -2196,6 +2208,7 @@ static void ct3_class_init(ObjectClass *oc, void *data)
     cvc->get_lsa = get_lsa;
     cvc->set_lsa = set_lsa;
     cvc->set_cacheline = set_cacheline;
+    cvc->mhd_access_valid = NULL;
 }
 
 static const TypeInfo ct3d_info = {
