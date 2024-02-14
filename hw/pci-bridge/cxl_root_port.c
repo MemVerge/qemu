@@ -54,7 +54,6 @@ typedef struct CXLRootPort {
     PCIResReserve res_reserve;
 } CXLRootPort;
 
-#define TYPE_CXL_ROOT_PORT "cxl-rp"
 DECLARE_INSTANCE_CHECKER(CXLRootPort, CXL_ROOT_PORT, TYPE_CXL_ROOT_PORT)
 
 /*

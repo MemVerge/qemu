@@ -57,6 +57,8 @@ struct CXLHost {
     bool passthrough;
 };
 
+#define TYPE_CXL_ROOT_PORT "cxl-rp"
+
 #define TYPE_PXB_CXL_HOST "pxb-cxl-host"
 OBJECT_DECLARE_SIMPLE_TYPE(CXLHost, PXB_CXL_HOST)
 

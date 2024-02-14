@@ -29,6 +29,8 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_device.h"
 #include "qemu/uuid.h"
+#include "hw/cxl/cxl_device.h"
+#include "hw/cxl/cxl.h"
 
 #define ACPI_GHES_ERRORS_FW_CFG_FILE        "etc/hardware_errors"
 #define ACPI_GHES_DATA_ADDR_FW_CFG_FILE     "etc/hardware_errors_addr"
@@ -279,6 +281,140 @@ static void build_append_aer_cper(PCIDevice *dev, GArray *table)
     }
 }
 
+static void build_append_cxl_cper(PCIDevice *dev, CXLError *cxl_err,
+                                  GArray *table)
+{
+    PCIDeviceClass *pci_class = PCI_DEVICE_GET_CLASS(dev);
+    uint16_t sn_cap_offset = pcie_find_capability(dev, 0x3);
+    uint16_t pcie_cap_offset = pci_find_capability(dev, 0x10);
+    uint16_t cxl_dvsec_offset;
+    uint16_t cxl_dvsec_len = 0;
+    uint8_t type = 0xff;
+    int i;
+
+    if (object_dynamic_cast(OBJECT(dev), TYPE_CXL_TYPE3)) {
+        type = 2;
+    } else if (object_dynamic_cast(OBJECT(dev), TYPE_CXL_USP)) {
+        type = 7;
+    } else if (object_dynamic_cast(OBJECT(dev), TYPE_CXL_DSP)) {
+        type = 6;
+    } else if (object_dynamic_cast(OBJECT(dev), TYPE_CXL_ROOT_PORT)) {
+        type = 5;
+    }
+
+    /* Only device or port dvsec should exist */
+    cxl_dvsec_offset = pcie_find_dvsec(dev, 0x1e98, 0);
+    if (cxl_dvsec_offset == 0) {
+        cxl_dvsec_offset = pcie_find_dvsec(dev, 0x1e98, 3);
+    }
+
+    if (cxl_dvsec_offset) {
+        cxl_dvsec_len = pci_get_long(dev->config + cxl_dvsec_offset + 4) >> 20;
+    }
+
+    /* CXL Protocol error record */
+    build_append_int_noprefix(table,
+                              (type != 0xff ? 1UL << 0 : 0) |
+                              (1UL << 1) | /* Agent address valid */
+                              (1UL << 2) | /* Device ID */
+                              ((sn_cap_offset ? 1UL : 0UL) << 3) |
+                              (1UL << 4) | /* Capability structure */
+                              ((cxl_dvsec_offset ? 1UL : 0UL) << 5) |
+                              (1UL << 6), /* Error Log */
+                              8);
+    /* Agent Type */
+    build_append_int_noprefix(table, type, 1); /* CXL 2.0 device */
+
+    /* Reserved */
+    build_append_int_noprefix(table, 0, 7);
+    /* Agent Address */
+    build_append_int_noprefix(table, PCI_FUNC(dev->devfn), 1);
+    build_append_int_noprefix(table, PCI_SLOT(dev->devfn), 1);
+    build_append_int_noprefix(table, pci_dev_bus_num(dev), 1);
+    build_append_int_noprefix(table, 0 /* Seg */, 2);
+    /* Reserved */
+    build_append_int_noprefix(table, 0, 3);
+    /* Device id */
+    build_append_int_noprefix(table, pci_class->vendor_id, 2);
+    build_append_int_noprefix(table, pci_class->device_id, 2);
+    build_append_int_noprefix(table, pci_class->subsystem_vendor_id, 2);
+    build_append_int_noprefix(table, pci_class->subsystem_id, 2);
+    build_append_int_noprefix(table, pci_class->class_id, 2);
+    /*
+     * TODO: figure out how to get the slot number as the slot number
+     * capabiltiy is deprecated so it only really exists via _DSM
+     */
+    build_append_int_noprefix(table, 0, 2);
+    /* Reserved */
+    build_append_int_noprefix(table, 0, 4);
+
+    if (sn_cap_offset) {
+        uint32_t dw = pci_get_long(dev->config + sn_cap_offset + 4);
+
+        build_append_int_noprefix(table, dw, 4);
+        dw = pci_get_long(dev->config + sn_cap_offset + 8);
+        build_append_int_noprefix(table, dw, 4);
+    } else {
+        build_append_int_noprefix(table, 0, 8);
+    }
+
+    if (pcie_cap_offset) {
+        uint32_t *pcie_cap = (uint32_t *)(dev->config + pcie_cap_offset);
+        for (i = 0; i < 60 / sizeof(uint32_t); i++) {
+            build_append_int_noprefix(table, pcie_cap[i], sizeof(uint32_t));
+        }
+    } else { /* Odd if we don't have one of these! */
+        build_append_int_noprefix(table, 0, 60);
+    }
+
+    /* CXL DVSEC Length */
+    build_append_int_noprefix(table, cxl_dvsec_len, 2);
+
+    /* Error log length */
+    build_append_int_noprefix(table, 0x18, 2); /* No head log as I'm lazy */
+    /* Reserved */
+    build_append_int_noprefix(table, 0, 4);
+    /* DVSEC */
+    for (i = 0; i < cxl_dvsec_len; i += sizeof(uint32_t)) {
+        uint32_t dw = pci_get_long(dev->config + cxl_dvsec_offset + i);
+
+        build_append_int_noprefix(table, dw, sizeof(dw));
+    }
+
+    /* error log */
+    if (object_dynamic_cast(OBJECT(dev), TYPE_CXL_TYPE3)) {
+        CXLType3Dev *ct3d = CXL_TYPE3(dev);
+        uint32_t *rs = ct3d->cxl_cstate.crb.cache_mem_registers;
+
+        /*
+         * TODO: Possibly move this to caller to gather up  - or work out
+         * generic way to get to it.
+         */
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_UNC_ERR_STATUS), 4);
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_UNC_ERR_MASK), 4);
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_UNC_ERR_SEVERITY), 4);
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_COR_ERR_STATUS), 4);
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_COR_ERR_MASK), 4);
+        build_append_int_noprefix(table,
+                                  ldl_le_p(rs + R_CXL_RAS_ERR_CAP_CTRL), 4);
+        if (cxl_err) {
+            for (i = 0; i < CXL_RAS_ERR_HEADER_NUM; i++) {
+                build_append_int_noprefix(table, cxl_err->header[i], 4);
+            }
+        } else {
+            build_append_int_noprefix(table, 0, 4 * CXL_RAS_ERR_HEADER_NUM);
+        }
+    } else {
+        /* TODO: Add support for ports etc */
+        build_append_int_noprefix(table, 0, 0x18 + 512);
+    }
+}
+
 static int acpi_ghes_record_mem_error(uint64_t error_block_address,
                                       uint64_t error_physical_addr)
 {
@@ -362,6 +498,52 @@ static int ghes_record_aer_error(PCIDevice *dev, uint64_t error_block_address)
     cpu_physical_memory_write(error_block_address, block->data, block->len);
     g_array_free(block, true);
 
+    return true;
+}
+
+static int ghes_record_cxl_error(PCIDevice *dev, CXLError *cxl_err,
+                                 uint64_t error_block_address)
+{
+    GArray *block;
+    uint32_t data_length;
+    const uint8_t aer_section_id_le[] = {
+        0xB4, 0xEF, 0xB9, 0x80,
+        0xB5, 0x52,
+        0xE3, 0x4D,
+        0xA7, 0x77, 0x68, 0x78, 0x4B, 0x77, 0x10, 0x48 };
+    QemuUUID fru_id = {0};
+
+    block = g_array_new(false, true /* clear */, 1);
+    /* Read the current length in bytes of the generic error data */
+    cpu_physical_memory_read(error_block_address + 8,
+                             &data_length, 4);
+
+    /* Add a new generic error data entry */
+    data_length += ACPI_GHES_DATA_LENGTH;
+    /* TO FIX: Error record dependent */
+    data_length += ACPI_GHES_PCIE_CPER_LENGTH;
+
+    /*
+     * Check whether it will run out of the preallocated memory if adding a new
+     * generic error data entry
+     */
+    if ((data_length + ACPI_GHES_GESB_SIZE) > ACPI_GHES_MAX_RAW_DATA_LENGTH) {
+        error_report("Record CPER out of boundary!!!");
+        return false;
+    }
+    /* Build the new generic error status block header */
+    acpi_ghes_generic_error_status(block, ACPI_GEBS_UNCORRECTABLE, 0, 0,
+                                   data_length, ACPI_CPER_SEV_RECOVERABLE);
+
+    /* Build the new generic error data entry header */
+    acpi_ghes_generic_error_data(block, aer_section_id_le,
+                                 ACPI_CPER_SEV_RECOVERABLE, 0, 0,
+                                 ACPI_GHES_PCIE_CPER_LENGTH, fru_id, 0);
+    /* Build the CXL CPER */
+    build_append_cxl_cper(dev, cxl_err, block);
+    /* Write back above whole new generic error data entry to guest memory */
+    cpu_physical_memory_write(error_block_address, block->data, block->len);
+    g_array_free(block, true);
     return true;
 }
 
@@ -674,6 +856,36 @@ bool ghes_record_aer_errors(PCIDevice *dev, uint32_t notify)
                               sizeof(uint64_t));
 
     return ghes_record_aer_error(dev, error_block_addr);
+}
+
+bool ghes_record_cxl_errors(PCIDevice *dev, PCIEAERErr *aer_err,
+                            CXLError *cxl_err, uint32_t notify)
+{
+    int read_ack_register = 0;
+    uint64_t read_ack_register_addr = 0;
+    uint64_t error_block_addr = 0;
+
+    if (!ghes_get_addr(notify, &error_block_addr, &read_ack_register_addr)) {
+        return false;
+    }
+
+    cpu_physical_memory_read(read_ack_register_addr,
+                             &read_ack_register, sizeof(uint64_t));
+    /* zero means OSPM does not acknowledge the error */
+    if (!read_ack_register) {
+        error_report("Last time OSPM does not acknowledge the error,"
+                     " record CPER failed this time, set the ack value to"
+                     " avoid blocking next time CPER record! exit");
+        read_ack_register = 1;
+        cpu_physical_memory_write(read_ack_register_addr,
+                                  &read_ack_register, sizeof(uint64_t));
+        return false;
+    }
+
+    read_ack_register = cpu_to_le64(0);
+    cpu_physical_memory_write(read_ack_register_addr,
+                              &read_ack_register, sizeof(uint64_t));
+    return ghes_record_cxl_error(dev, cxl_err, error_block_addr);
 }
 
 bool acpi_ghes_present(void)
