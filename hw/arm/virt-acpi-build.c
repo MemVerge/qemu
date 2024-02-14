@@ -916,6 +916,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     const int *irqmap = vms->irqmap;
     AcpiTable table = { .sig = "DSDT", .rev = 2, .oem_id = vms->oem_id,
                         .oem_table_id = vms->oem_table_id };
+    int mem_addr_offset;
 
     acpi_table_begin(&table, table_data);
     dsdt = init_aml_allocator();
@@ -972,6 +973,16 @@ build_dsdt(GArray *table_data, BIOSLinker *linker, VirtMachineState *vms)
     /* copy AML table into ACPI tables blob */
     g_array_append_vals(table_data, dsdt->buf->data, dsdt->buf->len);
 
+    /* Outside of the DSDT creation because we need the final address */
+    mem_addr_offset = build_append_named_dword(table_data, "COSC");
+    /* Patch COSC to point to the cxl-osc FW_CFG file */
+    bios_linker_loader_add_pointer(linker, ACPI_BUILD_TABLE_FILE,
+                                   mem_addr_offset, sizeof(uint32_t),
+                                   "etc/acpi/cxl-osc", 0);
+    /* Store address of cxl-osc FW_CFG file in cxl-osc-addr FW_CFG file */
+    bios_linker_loader_write_pointer(linker, "etc/acpi/cxl-osc-addr", 0,
+                                     sizeof(uint64_t), "etc/acpi/cxl-osc", 0);
+
     acpi_table_end(linker, &table);
     free_aml_allocator();
 }
@@ -995,6 +1006,8 @@ static void acpi_align_size(GArray *blob, unsigned align)
     g_array_set_size(blob, ROUND_UP(acpi_data_len(blob), align));
 }
 
+static GArray *test;
+
 static
 void virt_acpi_build(VirtMachineState *vms, AcpiBuildTables *tables)
 {
@@ -1003,6 +1016,10 @@ void virt_acpi_build(VirtMachineState *vms, AcpiBuildTables *tables)
     unsigned dsdt, xsdt;
     GArray *tables_blob = tables->table_data;
     MachineState *ms = MACHINE(vms);
+
+    /* Load the cxl-osc FW_CFG file into guest memory */
+    bios_linker_loader_alloc(tables->linker, "etc/acpi/cxl-osc",
+                             test, 64, false);
 
     table_offsets = g_array_new(false, true /* clear */,
                                         sizeof(uint32_t));
@@ -1202,6 +1219,10 @@ void virt_acpi_setup(VirtMachineState *vms)
 
     build_state = g_malloc0(sizeof *build_state);
 
+    test = g_array_new(false, true, 4);
+    acpi_data_push(test, sizeof(uint64_t));
+    *((uint64_t *)test->data) = 0xdeadbeefdeadbeef;
+
     acpi_build_tables_init(&tables);
     virt_acpi_build(vms, &tables);
 
@@ -1234,7 +1255,25 @@ void virt_acpi_setup(VirtMachineState *vms)
     virt_acpi_build_reset(build_state);
     vmstate_register(NULL, 0, &vmstate_virt_acpi_build, build_state);
 
-    /* Cleanup tables but don't free the memory: we track it
+    if (acpi_ghes_present()) {
+        AcpiGhesState *ags =
+            &ACPI_GED(object_resolve_path_type("", TYPE_ACPI_GED,
+                                               NULL))->ghes_state;
+
+        /* Add a cxl-osc FW_CFG file that will be used to stash osc outcomes */
+        fw_cfg_add_file(vms->fw_cfg, "etc/acpi/cxl-osc",
+                        test->data, test->len);
+        /*
+         * Add a cxl-osc-addr FW_CFG file that will be used to get to the
+         * address of cxl-osc FW_CFG file.  Can be written by FW.
+         */
+        fw_cfg_add_file_callback(vms->fw_cfg, "etc/acpi/cxl-osc-addr",
+                                 NULL, NULL, NULL,
+                                 &ags->pci_osc_addr_le, sizeof(uint64_t),
+                                 false);
+    }
+    /*
+     * Cleanup tables but don't free the memory: we track it
      * in build_state.
      */
     acpi_build_tables_cleanup(&tables, false);
