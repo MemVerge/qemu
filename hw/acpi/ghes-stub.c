@@ -25,6 +25,12 @@ bool ghes_record_cxl_errors(PCIDevice *dev, PCIEAERErr *err,
     return false;
 }
 
+bool ghes_record_cxl_event_gm(PCIDevice *dev, CXLEventGenMedia *gen,
+                              uint32_t notify)
+{
+    return false;
+}
+
 bool acpi_ghes_present(void)
 {
     return false;

@@ -281,6 +281,49 @@ static void build_append_aer_cper(PCIDevice *dev, GArray *table)
     }
 }
 
+static void build_append_cxl_event_cper(PCIDevice *dev, CXLEventGenMedia *gen,
+                                  GArray *table)
+{
+    PCIDeviceClass *pci_class = PCI_DEVICE_GET_CLASS(dev);
+    uint16_t sn_cap_offset = pcie_find_capability(dev, 0x3);
+    int i;
+
+    build_append_int_noprefix(table, 0x90, 4); /* Length */
+    build_append_int_noprefix(table,
+                              (1UL << 0) | /* Device ID */
+                              ((sn_cap_offset ? 1UL : 0UL) << 1) |
+                              (1UL << 2), /* Event Log entry */
+                              8);
+    /* Device id - differnet syntax from protocol error - sigh */
+    build_append_int_noprefix(table, pci_class->vendor_id, 2);
+    build_append_int_noprefix(table, pci_class->device_id, 2);
+    build_append_int_noprefix(table, PCI_FUNC(dev->devfn), 1);
+    build_append_int_noprefix(table, PCI_SLOT(dev->devfn), 1);
+    build_append_int_noprefix(table, pci_dev_bus_num(dev), 1);
+    build_append_int_noprefix(table, 0 /* Seg */, 2);
+    /*
+     * TODO: figure out how to get the slot number as the slot number
+     * capabiltiy is deprecated so it only really exists via _DSM
+     */
+    build_append_int_noprefix(table, 0, 2);
+
+    /* Reserved */
+    build_append_int_noprefix(table, 0, 1);
+
+    if (sn_cap_offset) {
+        uint32_t dw = pci_get_long(dev->config + sn_cap_offset + 4);
+
+        build_append_int_noprefix(table, dw, 4);
+        dw = pci_get_long(dev->config + sn_cap_offset + 8);
+        build_append_int_noprefix(table, dw, 4);
+    } else {
+        build_append_int_noprefix(table, 0, 8);
+    }
+    for (i = offsetof(typeof(*gen), hdr.length); i < sizeof(*gen); i++) {
+        build_append_int_noprefix(table, ((uint8_t *)gen)[i], 1);
+    }
+}
+
 static void build_append_cxl_cper(PCIDevice *dev, CXLError *cxl_err,
                                   GArray *table)
 {
@@ -499,6 +542,52 @@ static int ghes_record_aer_error(PCIDevice *dev, uint64_t error_block_address)
     g_array_free(block, true);
 
     return true;
+}
+
+static int ghes_record_cxl_gen_media(PCIDevice *dev, CXLEventGenMedia *gem,
+                                     uint64_t error_block_address)
+{
+    QemuUUID fru_id = {0};
+    GArray *block;
+    uint32_t data_length;
+    uint32_t event_length = 0x90;
+    const uint8_t section_id_le[] = { 0x77, 0x0a, 0xcd, 0xfb,
+                                      0x60, 0xc2,
+                                      0x7f, 0x41,
+                                      0x85, 0xa9,
+                                      0x08, 0x8b, 0x16, 0x21, 0xeb, 0xa6 };
+    block = g_array_new(false, true, 1);
+        /* Read the current length in bytes of the generic error data */
+    cpu_physical_memory_read(error_block_address + 8, &data_length, 4);
+
+    /* Add a new generic error data entry*/
+    data_length += ACPI_GHES_DATA_LENGTH;
+    data_length += event_length;
+
+    /*
+     * Check whether it will run out of the preallocated memory if adding a new
+     * generic error data entry
+     */
+    if ((data_length + ACPI_GHES_GESB_SIZE) > ACPI_GHES_MAX_RAW_DATA_LENGTH) {
+        error_report("Record CPER out of boundary!!!");
+        return false;
+    }
+    /* Build the new generic error status block header */
+    acpi_ghes_generic_error_status(block, ACPI_GEBS_UNCORRECTABLE, 0, 0,
+                                   data_length, ACPI_CPER_SEV_RECOVERABLE);
+
+    /* Build the new generic error data entry header */
+    acpi_ghes_generic_error_data(block, section_id_le,
+                                 ACPI_CPER_SEV_RECOVERABLE, 0, 0,
+                                 0x90, fru_id, 0);
+
+    /* Build the CXL CPER */
+    build_append_cxl_event_cper(dev, gem, block); /* 0x90 long */
+    /* Write back above whole new generic error data entry to guest memory */
+    cpu_physical_memory_write(error_block_address, block->data, block->len);
+    g_array_free(block, true);
+
+    return 0;
 }
 
 static int ghes_record_cxl_error(PCIDevice *dev, CXLError *cxl_err,
@@ -856,6 +945,37 @@ bool ghes_record_aer_errors(PCIDevice *dev, uint32_t notify)
                               sizeof(uint64_t));
 
     return ghes_record_aer_error(dev, error_block_addr);
+}
+
+bool ghes_record_cxl_event_gm(PCIDevice *dev, CXLEventGenMedia *gem,
+                              uint32_t notify)
+{
+    int read_ack_register = 0;
+    uint64_t read_ack_register_addr = 0;
+    uint64_t error_block_addr = 0;
+
+    if (!ghes_get_addr(notify, &error_block_addr, &read_ack_register_addr)) {
+        return false;
+    }
+
+    cpu_physical_memory_read(read_ack_register_addr,
+                             &read_ack_register, sizeof(uint64_t));
+    /* zero means OSPM does not acknowledge the error */
+    if (!read_ack_register) {
+        error_report("Last time OSPM does not acknowledge the error,"
+                     " record CPER failed this time, set the ack value to"
+                     " avoid blocking next time CPER record! exit");
+        read_ack_register = 1;
+        cpu_physical_memory_write(read_ack_register_addr,
+                                  &read_ack_register, sizeof(uint64_t));
+        return false;
+    }
+
+    read_ack_register = cpu_to_le64(0);
+    cpu_physical_memory_write(read_ack_register_addr,
+                              &read_ack_register, sizeof(uint64_t));
+
+    return ghes_record_cxl_gen_media(dev, gem, error_block_addr);
 }
 
 bool ghes_record_cxl_errors(PCIDevice *dev, PCIEAERErr *aer_err,

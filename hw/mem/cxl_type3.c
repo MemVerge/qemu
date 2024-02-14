@@ -1708,6 +1708,8 @@ void qmp_cxl_inject_general_media_event(const char *path, CxlEventLog log,
                                         const char *component_id,
                                         Error **errp)
 {
+    MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     Object *obj = object_resolve_path(path, NULL);
     CXLEventGenMedia gem;
     CXLEventRecordHdr *hdr = &gem.hdr;
@@ -1766,9 +1768,15 @@ void qmp_cxl_inject_general_media_event(const char *path, CxlEventLog log,
     }
 
     stw_le_p(&gem.validity_flags, valid_flags);
-
-    if (cxl_event_insert(cxlds, enc_log, (CXLEventRecordRaw *)&gem)) {
-        cxl_event_irq_assert(ct3d);
+    if (!acpi_fw_first_pci()) {
+        if (cxl_event_insert(cxlds, enc_log, (CXLEventRecordRaw *)&gem)) {
+            cxl_event_irq_assert(ct3d);
+        }
+    } else {
+        ghes_record_cxl_event_gm(PCI_DEVICE(ct3d), &gem, ACPI_GHES_NOTIFY_GPIO);
+        if (mc->set_error) {
+            mc->set_error();
+        }
     }
 }
 
