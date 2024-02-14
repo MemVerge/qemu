@@ -711,6 +711,11 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
             error_setg(errp, "volatile memdev must have backing device");
             return false;
         }
+        if (host_memory_backend_is_mapped(ct3d->hostvmem)) {
+            error_setg(errp, "memory backend %s can't be used multiple times.",
+               object_get_canonical_path_component(OBJECT(ct3d->hostvmem)));
+            return false;
+        }
         memory_region_set_nonvolatile(vmr, false);
         memory_region_set_enabled(vmr, true);
         host_memory_backend_set_mapped(ct3d->hostvmem, true);
@@ -732,6 +737,11 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
         pmr = host_memory_backend_get_memory(ct3d->hostpmem);
         if (!pmr) {
             error_setg(errp, "persistent memdev must have backing device");
+            return false;
+        }
+        if (host_memory_backend_is_mapped(ct3d->hostpmem)) {
+            error_setg(errp, "memory backend %s can't be used multiple times.",
+               object_get_canonical_path_component(OBJECT(ct3d->hostpmem)));
             return false;
         }
         memory_region_set_nonvolatile(pmr, true);
@@ -764,7 +774,12 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
             return false;
         }
 
-        /* FIXME: set dc as volatile for now */
+        if (host_memory_backend_is_mapped(ct3d->dc.host_dc)) {
+            error_setg(errp, "memory backend %s can't be used multiple times.",
+               object_get_canonical_path_component(OBJECT(ct3d->dc.host_dc)));
+            return false;
+        }
+        /* FIXME: set dc as nonvolatile for now */
         memory_region_set_nonvolatile(dc_mr, false);
         memory_region_set_enabled(dc_mr, true);
         host_memory_backend_set_mapped(ct3d->dc.host_dc, true);
