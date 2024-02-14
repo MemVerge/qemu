@@ -46,6 +46,9 @@ config PC
     select VIRTIO_PMEM_SUPPORTED
     select VIRTIO_MEM_SUPPORTED
     select HV_BALLOON_SUPPORTED
+    select ASPEED_I2C
+    select I2C_MCTP
+    select I2C_MCTP_CXL
 
 config PC_PCI
     bool
