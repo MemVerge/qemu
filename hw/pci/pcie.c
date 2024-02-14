@@ -304,6 +304,12 @@ void pcie_cap_deverr_init(PCIDevice *dev)
     uint32_t pos = dev->exp.exp_cap;
     pci_long_test_and_set_mask(dev->config + pos + PCI_EXP_DEVCAP,
                                PCI_EXP_DEVCAP_RBER);
+
+    /* HACK - FW first settings - how to do this cleanly? */
+    pci_long_test_and_set_mask(dev->config + pos + PCI_EXP_DEVCTL,
+                               PCI_EXP_DEVCTL_CERE | PCI_EXP_DEVCTL_NFERE |
+                               PCI_EXP_DEVCTL_FERE | PCI_EXP_DEVCTL_URRE);
+
     pci_long_test_and_set_mask(dev->wmask + pos + PCI_EXP_DEVCTL,
                                PCI_EXP_DEVCTL_CERE | PCI_EXP_DEVCTL_NFERE |
                                PCI_EXP_DEVCTL_FERE | PCI_EXP_DEVCTL_URRE);
