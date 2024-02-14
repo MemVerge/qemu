@@ -566,6 +566,7 @@ config ASPEED_SOC
     depends on TCG && ARM
     select DS1338
     select FTGMAC100
+    select ASPEED_I2C
     select I2C
     select I2C_MCTP
     select DPS310
