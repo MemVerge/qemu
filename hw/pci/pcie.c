@@ -944,6 +944,30 @@ uint16_t pcie_find_capability(PCIDevice *dev, uint16_t cap_id)
     return pcie_find_capability_list(dev, cap_id, NULL);
 }
 
+uint16_t pcie_find_dvsec(PCIDevice *dev, uint16_t vid, uint16_t id)
+{
+    uint16_t prev = 0;
+    uint16_t next;
+
+    while (1) {
+        uint32_t head1;
+
+        next = pcie_find_capability_list(dev, 0x23, &prev);
+        if (!next) {
+            break;
+        }
+        head1 = pci_get_long(dev->config + next + 4);
+        if ((head1 & 0xFFFF) == vid) {
+            uint16_t head2 = pci_get_word(dev->config + next + 8);
+            if (head2 == id) {
+                return next;
+            }
+        }
+        prev = next;
+    }
+    return 0;
+}
+
 static void pcie_ext_cap_set_next(PCIDevice *dev, uint16_t pos, uint16_t next)
 {
     uint32_t header = pci_get_long(dev->config + pos);
