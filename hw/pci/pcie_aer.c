@@ -20,6 +20,7 @@
 
 #include "qemu/osdep.h"
 #include "migration/vmstate.h"
+#include "hw/boards.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pcie.h"
 #include "hw/pci/msix.h"
@@ -27,6 +28,7 @@
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pcie_regs.h"
 #include "pci-internal.h"
+#include "hw/acpi/ghes.h"
 
 //#define DEBUG_PCIE
 #ifdef DEBUG_PCIE
@@ -638,6 +640,8 @@ static bool pcie_aer_inject_uncor_error(PCIEAERInject *inj, bool is_fatal)
  */
 int pcie_aer_inject_error(PCIDevice *dev, const PCIEAERErr *err)
 {
+    MachineState *machine = MACHINE(qdev_get_machine());
+    MachineClass *mc = MACHINE_GET_CLASS(machine);
     uint8_t *aer_cap = NULL;
     uint16_t devctl = 0;
     uint16_t devsta = 0;
@@ -701,16 +705,27 @@ int pcie_aer_inject_error(PCIDevice *dev, const PCIEAERErr *err)
     }
 
     /* send up error message */
-    inj.msg.source_id = err->source_id;
-    pcie_aer_msg(dev, &inj.msg);
+    if (!acpi_fw_first_pci()) {
+        inj.msg.source_id = err->source_id;
+        pcie_aer_msg(dev, &inj.msg);
 
-    if (inj.log_overflow) {
-        PCIEAERErr header_log_overflow = {
-            .status = PCI_ERR_COR_HL_OVERFLOW,
-            .flags = PCIE_AER_ERR_IS_CORRECTABLE,
-        };
-        int ret = pcie_aer_inject_error(dev, &header_log_overflow);
-        assert(!ret);
+        if (inj.log_overflow) {
+            PCIEAERErr header_log_overflow = {
+                .status = PCI_ERR_COR_HL_OVERFLOW,
+                .flags = PCIE_AER_ERR_IS_CORRECTABLE,
+            };
+            int ret = pcie_aer_inject_error(dev, &header_log_overflow);
+            assert(!ret);
+        }
+    } else {
+        ghes_record_aer_errors(dev, ACPI_GHES_NOTIFY_GPIO);
+        if (mc->set_error) {
+            mc->set_error();
+        }
+        /* Simulation a firmware clearing status */
+        /* Bit hacky but we only injected one error so this should be fine */
+        pci_set_long(aer_cap + PCI_ERR_UNCOR_STATUS, 0);
+        pci_set_long(aer_cap + PCI_ERR_COR_STATUS, 0);
     }
     return 0;
 }

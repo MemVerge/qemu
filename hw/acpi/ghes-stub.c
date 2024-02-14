@@ -11,6 +11,10 @@
 #include "qemu/osdep.h"
 #include "hw/acpi/ghes.h"
 
+bool ghes_record_aer_errors(PCIDevice *dev, uint32_t notify)
+{
+    return true;
+}
 int acpi_ghes_record_errors(uint8_t source_id, uint64_t physical_address)
 {
     return -1;

@@ -26,6 +26,8 @@
 #include "qemu/error-report.h"
 #include "hw/acpi/generic_event_device.h"
 #include "hw/nvram/fw_cfg.h"
+#include "hw/pci/pci.h"
+#include "hw/pci/pci_device.h"
 #include "qemu/uuid.h"
 
 #define ACPI_GHES_ERRORS_FW_CFG_FILE        "etc/hardware_errors"
@@ -52,6 +54,7 @@
 
 /* The memory section CPER size, UEFI 2.6: N.2.5 Memory Error Section */
 #define ACPI_GHES_MEM_CPER_LENGTH           80
+#define ACPI_GHES_PCIE_CPER_LENGTH 208
 
 /* Masks for block_status flags */
 #define ACPI_GEBS_UNCORRECTABLE         1
@@ -184,6 +187,98 @@ static void acpi_ghes_build_append_mem_cper(GArray *table,
     build_append_int_noprefix(table, 0, 7);
 }
 
+static void build_append_aer_cper(PCIDevice *dev, GArray *table)
+{
+    PCIDeviceClass *pci_class = PCI_DEVICE_GET_CLASS(dev);
+    uint16_t pcie_cap_offset = pci_find_capability(dev, 0x10);
+    uint16_t sn_cap_offset = pcie_find_capability(dev, 0x3);
+    uint16_t aer_cap_offset = pcie_find_capability(dev, 0x1);
+    int i;
+
+    build_append_int_noprefix(table,
+                               /* Port Type */
+                              ((pcie_cap_offset ? 1UL : 0UL) << 0) |
+                               /* PCI Express Version */
+                              (1UL << 1) |
+                              /* Command Status */
+                              (1UL << 2) |
+                              /* Device ID valid */
+                              (1UL << 3) |
+                              /* Serial Number */
+                              ((sn_cap_offset ? 1UL : 0UL) << 4) |
+                              /* Whole PCIe Capability */
+                              ((pcie_cap_offset ? 1UL : 0UL) << 6) |
+                              /* AER capability */
+                              ((aer_cap_offset ? 1UL : 0UL) << 7),
+                              8);
+    if (pcie_cap_offset) {
+        uint16_t cap_reg = pci_get_word(dev->config + pcie_cap_offset
+                                        + PCI_EXP_FLAGS);
+        uint16_t port_type = (cap_reg & PCI_EXP_FLAGS_TYPE) >>
+            PCI_EXP_FLAGS_TYPE_SHIFT;
+
+        build_append_int_noprefix(table, port_type, 4);
+    }
+    build_append_int_noprefix(table, 1, 1); /* Version PCIE r6.1 */
+    build_append_int_noprefix(table, 6, 1);
+    build_append_int_noprefix(table, 0, 2); /* Reserved */
+
+    build_append_int_noprefix(table,
+                              pci_get_word(dev->config + PCI_COMMAND), 2);
+    build_append_int_noprefix(table, pci_get_word(dev->config + PCI_STATUS), 2);
+    build_append_int_noprefix(table, 0, 4); /* 20-23 reserved */
+
+    build_append_int_noprefix(table, pci_class->vendor_id, 2);
+    build_append_int_noprefix(table, pci_class->device_id, 2);
+    build_append_int_noprefix(table, pci_class->class_id, 3);
+    build_append_int_noprefix(table, PCI_FUNC(dev->devfn), 1);
+    build_append_int_noprefix(table, PCI_SLOT(dev->devfn), 1);
+    build_append_int_noprefix(table, 0, 2); /* Segment number */
+
+    /* RP/B primary bus number / device bus number */
+    build_append_int_noprefix(table, pci_dev_bus_num(dev), 1);
+    build_append_int_noprefix(table, 0, 1);
+    /*
+     * TODO: Figure out where to get the slot number from.
+     * The slot number capability is deprecated so it only really
+     * exists via the _DSM which is not easily available from here.
+     */
+    build_append_int_noprefix(table, 0, 2);
+    build_append_int_noprefix(table, 0, 1);  /* reserved */
+
+    /* Serial number */
+    if (sn_cap_offset) {
+        uint32_t dw = pci_get_long(dev->config + sn_cap_offset + 4);
+
+        build_append_int_noprefix(table, dw, 4);
+        dw = pci_get_long(dev->config + sn_cap_offset + 8);
+        build_append_int_noprefix(table, dw, 4);
+    } else {
+        build_append_int_noprefix(table, 0, 8);
+    }
+
+    /* Bridge control status */
+    build_append_int_noprefix(table, 0, 4);
+
+    if (pcie_cap_offset) {
+        uint32_t *pcie_cap = (uint32_t *)(dev->config + pcie_cap_offset);
+        for (i = 0; i < 60 / sizeof(uint32_t); i++) {
+            build_append_int_noprefix(table, pcie_cap[i], sizeof(uint32_t));
+        }
+    } else { /* Odd if we don't have one of these! */
+        build_append_int_noprefix(table, 0, 60);
+    }
+
+    if (aer_cap_offset) {
+        uint32_t *aer_cap = (uint32_t *)(dev->config + aer_cap_offset);
+        for (i = 0; i < 96 / sizeof(uint32_t); i++) {
+            build_append_int_noprefix(table, aer_cap[i], sizeof(uint32_t));
+        }
+    } else {
+        build_append_int_noprefix(table, 0, 96);
+    }
+}
+
 static int acpi_ghes_record_mem_error(uint64_t error_block_address,
                                       uint64_t error_physical_addr)
 {
@@ -229,6 +324,45 @@ static int acpi_ghes_record_mem_error(uint64_t error_block_address,
     g_array_free(block, true);
 
     return 0;
+}
+
+static int ghes_record_aer_error(PCIDevice *dev, uint64_t error_block_address)
+{
+    const uint8_t aer_section_id_le[] = {
+        0x54, 0xE9, 0x95, 0xD9, 0xC1, 0xBB, 0x0F,
+        0x43, 0xAD, 0x91, 0xB4, 0x4D, 0xCB, 0x3C,
+        0x6F, 0x35 };
+    QemuUUID fru_id = { 0 };
+    GArray *block = g_array_new(false, true, 1);
+    uint32_t data_length;
+
+    /* Read the current length in bytes of the generic error data */
+    cpu_physical_memory_read(error_block_address + 8, &data_length, 4);
+
+    /* Add a new generic error data entry*/
+    data_length += ACPI_GHES_DATA_LENGTH;
+    data_length += ACPI_GHES_PCIE_CPER_LENGTH;
+
+    /*
+     * Check whether it will run out of the preallocated memory if adding a new
+     * generic error data entry
+     */
+    if ((data_length + ACPI_GHES_GESB_SIZE) > ACPI_GHES_MAX_RAW_DATA_LENGTH) {
+        error_report("Record CPER out of boundary!!!");
+        return false;
+    }
+
+    acpi_ghes_generic_error_status(block, ACPI_GEBS_UNCORRECTABLE, 0, 0,
+                                   data_length, ACPI_CPER_SEV_RECOVERABLE);
+    acpi_ghes_generic_error_data(block, aer_section_id_le,
+                                 ACPI_CPER_SEV_RECOVERABLE, 0, 0,
+                                 ACPI_GHES_PCIE_CPER_LENGTH, fru_id, 0);
+
+    build_append_aer_cper(dev, block);
+    cpu_physical_memory_write(error_block_address, block->data, block->len);
+    g_array_free(block, true);
+
+    return true;
 }
 
 /*
@@ -392,22 +526,21 @@ void acpi_ghes_add_fw_cfg(AcpiGhesState *ags, FWCfgState *s,
     ags->present = true;
 }
 
+static uint64_t ghes_get_state_start_address(void)
+{
+    AcpiGedState *acpi_ged_state =
+        ACPI_GED(object_resolve_path_type("", TYPE_ACPI_GED, NULL));
+    AcpiGhesState *ags = &acpi_ged_state->ghes_state;
+
+    return le64_to_cpu(ags->ghes_addr_le);
+}
+
 int acpi_ghes_record_errors(uint8_t source_id, uint64_t physical_address)
 {
     uint64_t error_block_addr, read_ack_register_addr, read_ack_register = 0;
-    uint64_t start_addr;
+    uint64_t start_addr = ghes_get_state_start_address();
     bool ret = -1;
-    AcpiGedState *acpi_ged_state;
-    AcpiGhesState *ags;
-
     assert(source_id < ACPI_HEST_SRC_ID_RESERVED);
-
-    acpi_ged_state = ACPI_GED(object_resolve_path_type("", TYPE_ACPI_GED,
-                                                       NULL));
-    g_assert(acpi_ged_state);
-    ags = &acpi_ged_state->ghes_state;
-
-    start_addr = le64_to_cpu(ags->ghes_addr_le);
 
     if (physical_address) {
 
@@ -446,6 +579,101 @@ int acpi_ghes_record_errors(uint8_t source_id, uint64_t physical_address)
     }
 
     return ret;
+}
+
+/*
+ * Error register block data layout
+ *
+ * | +---------------------+ ges.ghes_addr_le
+ * | |error_block_address0 |
+ * | +---------------------+
+ * | |error_block_address1 |
+ * | +---------------------+ --+--
+ * | |    .............    | GHES_ADDRESS_SIZE
+ * | +---------------------+ --+--
+ * | |error_block_addressN |
+ * | +---------------------+
+ * | | read_ack_register0  |
+ * | +---------------------+ --+--
+ * | | read_ack_register1  | GHES_ADDRESS_SIZE
+ * | +---------------------+ --+--
+ * | |   .............     |
+ * | +---------------------+
+ * | | read_ack_registerN  |
+ * | +---------------------+ --+--
+ * | |      CPER           |   |
+ * | |      ....           | GHES_MAX_RAW_DATA_LENGT
+ * | |      CPER           |   |
+ * | +---------------------+ --+--
+ * | |    ..........       |
+ * | +---------------------+
+ * | |      CPER           |
+ * | |      ....           |
+ * | |      CPER           |
+ * | +---------------------+
+ */
+
+/* Map from uint32_t notify to entry offset in GHES */
+static const uint8_t error_source_to_index[] = { 0xff, 0xff, 0xff, 0xff,
+                                                 0xff, 0xff, 0xff, 1, 0};
+
+static bool ghes_get_addr(uint32_t notify, uint64_t *error_block_addr,
+                          uint64_t *read_ack_register_addr)
+{
+    uint64_t base;
+
+    if (notify >= ACPI_GHES_NOTIFY_RESERVED) {
+        return false;
+    }
+
+    /* Find and check the source id for this new CPER */
+    if (error_source_to_index[notify] == 0xff) {
+        return false;
+    }
+
+    base = ghes_get_state_start_address();
+
+    *read_ack_register_addr = base +
+        ACPI_GHES_ERROR_SOURCE_COUNT * sizeof(uint64_t) +
+        error_source_to_index[notify] * sizeof(uint64_t);
+
+    /* Could also be read back from the error_block_address register */
+    *error_block_addr = base +
+        ACPI_GHES_ERROR_SOURCE_COUNT * sizeof(uint64_t) +
+        ACPI_GHES_ERROR_SOURCE_COUNT * sizeof(uint64_t) +
+        error_source_to_index[notify] * ACPI_GHES_MAX_RAW_DATA_LENGTH;
+
+    return true;
+}
+
+bool ghes_record_aer_errors(PCIDevice *dev, uint32_t notify)
+{
+    int read_ack_register = 0;
+    uint64_t read_ack_register_addr = 0;
+    uint64_t error_block_addr = 0;
+
+    if (!ghes_get_addr(notify, &error_block_addr, &read_ack_register_addr)) {
+        return false;
+    }
+
+    cpu_physical_memory_read(read_ack_register_addr, &read_ack_register,
+                             sizeof(uint64_t));
+    /* zero means OSPM does not acknowledge the error */
+    if (!read_ack_register) {
+        error_report("Last time OSPM does not acknowledge the error,"
+                     " record CPER failed this time, set the ack value to"
+                     " avoid blocking next time CPER record! exit");
+        read_ack_register = 1;
+        cpu_physical_memory_write(read_ack_register_addr, &read_ack_register,
+                                  sizeof(uint64_t));
+        return false;
+    }
+
+    read_ack_register = cpu_to_le64(0);
+    cpu_physical_memory_write(read_ack_register_addr, &read_ack_register,
+                              sizeof(uint64_t));
+
+    return ghes_record_aer_error(dev, error_block_addr);
 }
 
 bool acpi_ghes_present(void)
