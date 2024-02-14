@@ -23,6 +23,8 @@
 #define CXL_COMPONENT_REG_BAR_IDX 0
 #define CXL_DEVICE_REG_BAR_IDX 2
 
+#define CXL_CPMU_SIZE          0x8f8
+
 #define CXL_WINDOW_MAX 10
 
 typedef struct PXBCXLDev PXBCXLDev;
