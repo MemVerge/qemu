@@ -26,6 +26,10 @@ config ACPI_SMBUS
     bool
     select SMBUS
 
+config ASPEED_I2C
+    bool
+    select SMBUS
+
 config BITBANG_I2C
     bool
     select I2C
