@@ -316,9 +316,6 @@ static Aml *__build_cxl_osc_method(bool fw_first)
     aml_append(if_cxl, aml_store(aml_name("CDW4"), aml_name("SUPC")));
     aml_append(if_cxl, aml_store(aml_name("CDW5"), aml_name("CTRC")));
 
-    /* CXL 2.0 Port/Device Register access */
-    aml_append(if_cxl,
-               aml_or(aml_name("CDW5"), aml_int(0x1), aml_name("CDW5")));
     aml_append(if_uuid, if_cxl);
 
     aml_append(if_uuid, aml_return(aml_arg(3)));

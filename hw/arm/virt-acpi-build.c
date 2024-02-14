@@ -208,6 +208,7 @@ static void acpi_dsdt_add_pci(Aml *scope, const MemMapEntry *memmap,
         .ecam   = memmap[ecam_id],
         .irq    = irq,
         .bus    = vms->bus,
+        .fw_first_ras = vms->fw_first_ras,
     };
 
     if (vms->highmem_mmio) {
