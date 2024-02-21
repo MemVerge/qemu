@@ -1676,17 +1676,20 @@ static CXLRetCode cmd_dcd_release_dyn_cap(const struct cxl_cmd *cmd,
                 found = true;
                 cxl_remove_extent_from_extent_list(extent_list, ent);
                 ct3d->dc.total_extent_count -= 1;
+                ct3_clear_region_block_backed(ct3d, ent_start_dpa, ent_len);
 
                 if (len1) {
                     cxl_insert_extent_to_extent_list(extent_list,
                                                      ent_start_dpa, len1,
                                                      NULL, 0);
                     ct3d->dc.total_extent_count += 1;
+                    ct3_set_region_block_backed(ct3d, ent_start_dpa, len1);
                 }
                 if (len2) {
                     cxl_insert_extent_to_extent_list(extent_list, dpa + len,
                                                      len2, NULL, 0);
                     ct3d->dc.total_extent_count += 1;
+                    ct3_set_region_block_backed(ct3d, dpa + len, len2);
                 }
                 break;
                 /*Currently we reject the attempt to remove a superset*/
