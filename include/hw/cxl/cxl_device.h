@@ -490,6 +490,7 @@ struct CXLType3Dev {
         AddressSpace host_dc_as;
         uint64_t total_capacity; /* 256M aligned */
         CXLDCExtentList extents;
+        CXLDCExtentList extents_pending_to_add;
 
         uint32_t total_extent_count;
         uint32_t ext_list_gen_seq;
@@ -550,4 +551,10 @@ void cxl_set_poison_list_overflowed(CXLType3Dev *ct3d);
 
 CXLDCDRegion *cxl_find_dc_region(CXLType3Dev *ct3d, uint64_t dpa, uint64_t len);
 
+void cxl_insert_extent_to_extent_list(CXLDCExtentList *list,
+                                      uint64_t dpa,
+                                      uint64_t len,
+                                      uint8_t *tag,
+                                      uint16_t shared_seq);
+bool test_any_bits_set(const unsigned long *addr, int nr, int size);
 #endif
