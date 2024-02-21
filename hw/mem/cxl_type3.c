@@ -661,6 +661,7 @@ static bool cxl_create_dc_regions(CXLType3Dev *ct3d, Error **errp)
         region_base += region->len;
         ct3d->dc.total_capacity += region->len;
     }
+    QTAILQ_INIT(&ct3d->dc.extents);
 
     return true;
 }
