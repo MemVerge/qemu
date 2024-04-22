@@ -2199,12 +2199,8 @@ static void qmp_cxl_process_dynamic_capacity_prescriptive(const char *path,
         num_extents++;
     }
 
-    /*
-     * Host-local sanity check has passed;
-     * try to reserve those regions in the MHD
-     */
-    if (type == DC_EVENT_ADD_CAPACITY &&
-        cvc->mhd_reserve_extents &&
+    /* If this is an MHD, attempt to reserve the extents */
+    if (type == DC_EVENT_ADD_CAPACITY && cvc->mhd_reserve_extents &&
        !cvc->mhd_reserve_extents(&dcd->parent_obj, records, rid)) {
         error_setg(errp, "mhsld is enabled and extent reservation failed");
         return;
