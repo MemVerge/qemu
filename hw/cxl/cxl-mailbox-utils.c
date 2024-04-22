@@ -2302,13 +2302,11 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
 
     ret = cxl_detect_malformed_extent_list(ct3d, in);
     if (ret != CXL_MBOX_SUCCESS) {
-        /* TODO free the capacity associated with extents_pending in the MHD */
         return ret;
     }
 
     ret = cxl_dcd_add_dyn_cap_rsp_dry_run(ct3d, in);
     if (ret != CXL_MBOX_SUCCESS) {
-        /* TODO free the capacity associated with extents_pending in the MHD */
         return ret;
     }
 
