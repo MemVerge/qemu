@@ -936,7 +936,6 @@ static bool cxl_setup_memory(CXLType3Dev *ct3d, Error **errp)
         g_free(dc_name);
 
         if (!cxl_create_dc_regions(ct3d, errp)) {
-            error_setg(errp, "setup DC regions failed");
             return false;
         }
     }
