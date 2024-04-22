@@ -801,6 +801,7 @@ static void cxl_destroy_dc_regions(CXLType3Dev *ct3d)
     CXLDCExtentGroup *group, *group_next;
     CXLType3Class *cvc = CXL_TYPE3_CLASS(ct3d);
     int i;
+    CXLDCRegion *region;
 
     QTAILQ_FOREACH_SAFE(ent, &ct3d->dc.extents, node, ent_next) {
         cxl_remove_extent_from_extent_list(&ct3d->dc.extents, ent);
@@ -815,13 +816,12 @@ static void cxl_destroy_dc_regions(CXLType3Dev *ct3d)
     }
 
     for (i = 0; i < ct3d->dc.num_regions; i++) {
-        g_free(ct3d->dc.regions[i].blk_bitmap);
-        if (cvc->mhd_release_extent)
-            cvc->mhd_release_extent(
-                &ct3d->parent_obj,
-                ct3d->dc.regions[i].base,
-                ct3d->dc.regions[i].len
-            );
+        region = &ct3d->dc.regions[i];
+        g_free(region->blk_bitmap);
+        if (cvc->mhd_release_extent) {
+            cvc->mhd_release_extent(&ct3d->parent_obj, region->base,
+                    region->len);
+        }
     }
 }
 
