@@ -263,16 +263,15 @@ static bool cxl_mhsld_reserve_extents(PCIDevice *d,
     return true;
 }
 
+/* TODO: rename to reclaim extents */
 static bool cxl_mhsld_accept_extents(PCIDevice *d,
                                      CXLDCExtentGroupList *ext_groups,
                                      CXLUpdateDCExtentListInPl *in) {
-    CXLDCExtent *ent;
     CXLMHSLDState *s = CXL_MHSLD(d);
+    CXLDCExtentGroup *ext_group = QTAILQ_FIRST(ext_groups);
+    CXLDCExtent *ent;
     uint64_t dpa, len, i;
     uint8_t exp;
-
-    /* Get the extents that were enqueued in the dc_add_request */
-    CXLDCExtentGroup *ext_group = QTAILQ_FIRST(ext_groups);
 
     /* Mask the accepted extents, so we know not to clear them */
     for (i = 0; i < in->num_entries_updated; i++) {
@@ -283,12 +282,35 @@ static bool cxl_mhsld_accept_extents(PCIDevice *d,
          * exp == (1 << mhd_head) means we expect the accepted
          * extents to have been reserved in a previous state_set
          */
-        cxl_mhsld_state_set(s,
-                            dpa / MHSLD_BLOCK_SZ,
-                            len / MHSLD_BLOCK_SZ,
-                            /* exp = */ (1 << s->mhd_head),
-                            /* val = */ ~0);
+        cxl_mhsld_state_set(s, dpa / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ,
+                (1 << s->mhd_head), ~0);
     }
+
+    /*
+     *
+     * [(dpa,len),(dpa,len),...]
+     * pending_list -> [(dpa,len), (dpa,len), ...]
+     *
+     * 1. get each extent in the pending list containing each in->(dpa,len)
+     * 2. add all extent->(dpa,len) to a bitmask
+     * 3. unset all bits covered in the accept list
+     * 4. remaining bits are the ones to be reclaimed
+     *
+     * pending: [0,0,0,1,1,1]  dpa(3),len(3)
+     * accept:  accept(4,2)
+     * [0,0,0,0,1,1]
+     *
+     * pending([4,2], [1,3], [6,7])
+     * accept([4,1], [1,2])
+     * 1 & 2. [0,1,1,1,1,1,0,0,0,...]  - we've skipped [6,7]
+     * 3. [0,0,0,1,1,0,0,0,0,....]
+     * 4. -> cleanup bits [3,4] in mhd state
+     *
+     * allocate:
+     *  0 -> hd_id
+     * accept:
+     *  if rejected - hd_id->0
+     */
 
     /* Release pending extents whose block states are not ~0 */
     QTAILQ_FOREACH(ent, &ext_group->list, node) {
@@ -303,11 +325,8 @@ static bool cxl_mhsld_accept_extents(PCIDevice *d,
         len = in->updated_entries[i].len;
         exp = ~0 & ~(1u << s->mhd_head);
 
-        cxl_mhsld_state_set(s,
-                            dpa / MHSLD_BLOCK_SZ,
-                            len / MHSLD_BLOCK_SZ,
-                            exp,
-                            /* val = */ (1u << s->mhd_head));
+        cxl_mhsld_state_set(s, dpa / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ, exp,
+                (1u << s->mhd_head));
     }
 
     return true;
@@ -316,10 +335,7 @@ static bool cxl_mhsld_accept_extents(PCIDevice *d,
 static bool cxl_mhsld_release_extent(PCIDevice *d,
                                      uint64_t dpa,
                                      uint64_t len) {
-    /*
-     * TODO:
-     * Replace dpa division with cxl_mhsld_find_dc_region_start().
-     */
+    /* TODO: Replace dpa division with cxl_mhsld_find_dc_region_start(). */
     cxl_mhsld_state_clear(CXL_MHSLD(d),
                           dpa / MHSLD_BLOCK_SZ,
                           len / MHSLD_BLOCK_SZ);
@@ -334,10 +350,7 @@ static bool cxl_mhsld_access_valid(PCIDevice *d,
     CXLDCRegion *r = cxl_find_dc_region(ct3d, addr, size);
     size_t i;
 
-    /*
-     * TODO:
-     * Replace addr division with cxl_mhsld_find_dc_region_start().
-     */
+    /* TODO: Replace addr division with cxl_mhsld_find_dc_region_start(). */
     addr = addr / r->block_size;
     size = size / r->block_size;
 
