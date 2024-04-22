@@ -2381,7 +2381,6 @@ static CXLRetCode cxl_dc_extent_release_dry_run(CXLType3Dev *ct3d,
         /* In an MHD, check that this DPA range belongs to this host */
         if (cvc->mhd_access_valid &&
             !cvc->mhd_access_valid(&ct3d->parent_obj, dpa, len)) {
-            /* TODO: error code for when host does not own the req'd extent */
             ret = CXL_MBOX_INVALID_PA;
             goto free_and_exit;
         }
