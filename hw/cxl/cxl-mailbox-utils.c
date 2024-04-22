@@ -2320,9 +2320,8 @@ static CXLRetCode cmd_dcd_add_dyn_cap_rsp(const struct cxl_cmd *cmd,
     }
 
     if (cvc->mhd_accept_extents)
-        cvc->mhd_accept_extents(&ct3d->parent_obj,
-                                &ct3d->dc.extents_pending,
-                                in);
+        cvc->mhd_accept_extents(&ct3d->parent_obj, &ct3d->dc.extents_pending,
+                in);
 
     /* Remove the first extent group in the pending list*/
     cxl_extent_group_list_delete_front(&ct3d->dc.extents_pending);
