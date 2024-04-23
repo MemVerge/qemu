@@ -14,6 +14,7 @@
 #include "hw/pci/pci_device.h"
 #include "hw/register.h"
 #include "hw/cxl/cxl_events.h"
+#include "qapi/qapi-commands-cxl.h"
 
 #include "hw/cxl/cxl_cpmu.h"
 /*
@@ -651,6 +652,13 @@ struct CXLType3Class {
                                size_t *len_out,
                                CXLCCI *cci);
     bool (*mhd_access_valid)(PCIDevice *d, uint64_t addr, unsigned int size);
+    bool (*mhd_reserve_extents)(PCIDevice *d,
+                                CXLDCExtentRecordList *records,
+                                uint8_t rid);
+    bool (*mhd_reclaim_extents)(PCIDevice *d,
+                                CXLDCExtentGroupList *groups,
+                                CXLUpdateDCExtentListInPl *in);
+    bool (*mhd_release_extent)(PCIDevice *d, uint64_t dpa, uint64_t len);
 };
 
 struct CSWMBCCIDev {
