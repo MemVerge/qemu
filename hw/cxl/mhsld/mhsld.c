@@ -30,10 +30,8 @@ OBJECT_DECLARE_TYPE(CXLMHSLDState, CXLMHSLDClass, CXL_MHSLD)
  * and Head-to-LD mapping of a Multi-Headed device.
  */
 static CXLRetCode cmd_mhd_get_info(const struct cxl_cmd *cmd,
-                                   uint8_t *payload_in,
-                                   size_t len_in,
-                                   uint8_t *payload_out,
-                                   size_t *len_out,
+                                   uint8_t *payload_in, size_t len_in,
+                                   uint8_t *payload_out, size_t *len_out,
                                    CXLCCI * cci)
 {
     CXLMHSLDState *s = CXL_MHSLD(cci->d);
@@ -122,7 +120,8 @@ static void cxl_mhsld_state_initialize(CXLMHSLDState *s, size_t dc_size)
 
 /* Returns starting index of region in MHD map. */
 static inline size_t cxl_mhsld_find_dc_region_start(PCIDevice *d,
-                                                    CXLDCRegion *r) {
+                                                    CXLDCRegion *r)
+{
     CXLType3Dev *dcd = CXL_TYPE3(d);
     size_t start = 0;
     uint8_t rid;
@@ -155,15 +154,13 @@ static MHSLDSharedState *cxl_mhsld_state_map(CXLMHSLDState *s)
     return (MHSLDSharedState *)map;
 }
 
-static bool cxl_mhsld_state_set(CXLMHSLDState *s,
-                                size_t block_start,
-                                size_t block_count,
-                                uint8_t exp,
-                                uint8_t val)
+static bool cxl_mhsld_state_set(CXLMHSLDState *s, size_t block_start,
+                                size_t block_count)
 {
-    uint8_t prev, *block;
+    uint8_t prev, val, *block;
     size_t i;
-    bool fail = false;
+
+    val = (1 << s->mhd_head);
 
     /*
      * Try to claim all extents from start -> start + count;
@@ -171,14 +168,13 @@ static bool cxl_mhsld_state_set(CXLMHSLDState *s,
      */
     for (i = 0; i < block_count; ++i) {
         block = &s->mhd_state->blocks[block_start + i];
-        prev = __sync_val_compare_and_swap(block, exp, val);
-        if (prev != exp) {
-            fail = true;
+        prev = __sync_val_compare_and_swap(block, 0, val);
+        if (prev != 0) {
             break;
         }
     }
 
-    if (!fail) {
+    if (prev == 0) {
         return true;
     }
 
@@ -194,8 +190,7 @@ static bool cxl_mhsld_state_set(CXLMHSLDState *s,
     return false;
 }
 
-static void cxl_mhsld_state_clear(CXLMHSLDState *s,
-                                  size_t block_start,
+static void cxl_mhsld_state_clear(CXLMHSLDState *s, size_t block_start,
                                   size_t block_count)
 {
     size_t i;
@@ -217,7 +212,8 @@ static void cxl_mhsld_state_clear(CXLMHSLDState *s,
  */
 static bool cxl_mhsld_reserve_extents(PCIDevice *d,
                                       CXLDCExtentRecordList *records,
-                                      uint8_t rid) {
+                                      uint8_t rid)
+{
     uint64_t len, dpa;
     bool rc;
 
@@ -228,18 +224,10 @@ static bool cxl_mhsld_reserve_extents(PCIDevice *d,
     CXLDCRegion *region = &ct3d->dc.regions[rid];
 
     for (; list; list = list->next) {
-        len = list->value->len;
-        dpa = list->value->offset + region->base;
+        len = list->value->len / MHSLD_BLOCK_SZ;
+        dpa = (list->value->offset + region->base) / MHSLD_BLOCK_SZ;
 
-        /*
-         * TODO:
-         * Replace dpa division with cxl_mhsld_find_dc_region_start().
-         */
-        rc = cxl_mhsld_state_set(s,
-                                 dpa / MHSLD_BLOCK_SZ,
-                                 len / MHSLD_BLOCK_SZ,
-                                 /* exp = */ 0,
-                                 /* val = */ (1 << s->mhd_head));
+        rc = cxl_mhsld_state_set(s, dpa, len);
 
         if (!rc) {
             rollback = records;
@@ -249,12 +237,10 @@ static bool cxl_mhsld_reserve_extents(PCIDevice *d,
 
     /* Setting the mhd state failed. Roll back the extents that were added */
     for (; rollback; rollback = rollback->next) {
-        len = rollback->value->len;
-        dpa = list->value->offset + region->base;
+        len = rollback->value->len / MHSLD_BLOCK_SZ;
+        dpa = (list->value->offset + region->base) / MHSLD_BLOCK_SZ;
 
-        cxl_mhsld_state_clear(s,
-                              dpa / MHSLD_BLOCK_SZ,
-                              len / MHSLD_BLOCK_SZ);
+        cxl_mhsld_state_clear(s, dpa, len);
 
         if (rollback == list) {
             return false;
@@ -265,8 +251,9 @@ static bool cxl_mhsld_reserve_extents(PCIDevice *d,
 }
 
 static bool cxl_mhsld_reclaim_extents(PCIDevice *d,
-                                     CXLDCExtentGroupList *ext_groups,
-                                     CXLUpdateDCExtentListInPl *in) {
+                                      CXLDCExtentGroupList *ext_groups,
+                                      CXLUpdateDCExtentListInPl *in)
+{
     CXLMHSLDState *s = CXL_MHSLD(d);
     CXLType3Dev *ct3d = CXL_TYPE3(d);
     CXLDCExtentGroup *ext_group = QTAILQ_FIRST(ext_groups);
@@ -310,25 +297,21 @@ static bool cxl_mhsld_reclaim_extents(PCIDevice *d,
     return true;
 }
 
-static bool cxl_mhsld_release_extent(PCIDevice *d,
-                                     uint64_t dpa,
-                                     uint64_t len) {
-    /* TODO: Replace dpa division with cxl_mhsld_find_dc_region_start(). */
-    cxl_mhsld_state_clear(CXL_MHSLD(d),
-                          dpa / MHSLD_BLOCK_SZ,
-                          len / MHSLD_BLOCK_SZ);
+static bool cxl_mhsld_release_extent(PCIDevice *d, uint64_t dpa, uint64_t len)
+{
+    cxl_mhsld_state_clear(CXL_MHSLD(d), dpa / MHSLD_BLOCK_SZ,
+        len / MHSLD_BLOCK_SZ);
     return true;
 }
 
-static bool cxl_mhsld_access_valid(PCIDevice *d,
-                                   uint64_t addr,
-                                   unsigned int size) {
+static bool cxl_mhsld_access_valid(PCIDevice *d, uint64_t addr,
+                                   unsigned int size)
+{
     CXLType3Dev *ct3d = CXL_TYPE3(d);
     CXLMHSLDState *s = CXL_MHSLD(d);
     CXLDCRegion *r = cxl_find_dc_region(ct3d, addr, size);
     size_t i;
 
-    /* TODO: Replace addr division with cxl_mhsld_find_dc_region_start(). */
     addr = addr / r->block_size;
     size = size / r->block_size;
 
@@ -417,19 +400,11 @@ static void cxl_mhsld_exit(PCIDevice *pci_dev)
 static void cxl_mhsld_reset(DeviceState *d)
 {
     CXLMHSLDState *s = CXL_MHSLD(d);
-    size_t blocks, i;
 
     ct3d_reset(d);
     cxl_add_cci_commands(&s->ct3d.cci, cxl_cmd_set_mhsld, 512);
 
-    /*
-     * Scan s->mhd_state->blocks for any byte with bit s->mhd_head set,
-     * and clear it (release the capacity)
-     */
-    blocks = s->mhd_state->nr_blocks;
-    for (i = 0; i < blocks; i++) {
-        s->mhd_state->blocks[i] &= ~(1 << s->mhd_head);
-    }
+    cxl_mhsld_state_clear(s, 0, s->mhd_state->nr_blocks);
 }
 
 /*
