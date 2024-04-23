@@ -655,9 +655,9 @@ struct CXLType3Class {
     bool (*mhd_reserve_extents)(PCIDevice *d,
                                 CXLDCExtentRecordList *records,
                                 uint8_t rid);
-    bool (*mhd_accept_extents)(PCIDevice *d,
-                               CXLDCExtentGroupList *groups,
-                               CXLUpdateDCExtentListInPl *in);
+    bool (*mhd_reclaim_extents)(PCIDevice *d,
+                                CXLDCExtentGroupList *groups,
+                                CXLUpdateDCExtentListInPl *in);
     bool (*mhd_release_extent)(PCIDevice *d, uint64_t dpa, uint64_t len);
 };
 

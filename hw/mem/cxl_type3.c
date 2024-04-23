@@ -2350,7 +2350,7 @@ static void ct3_class_init(ObjectClass *oc, void *data)
     cvc->mhd_get_info = NULL;
     cvc->mhd_access_valid = NULL;
     cvc->mhd_reserve_extents = NULL;
-    cvc->mhd_accept_extents = NULL;
+    cvc->mhd_reclaim_extents = NULL;
     cvc->mhd_release_extent = NULL;
 }
 

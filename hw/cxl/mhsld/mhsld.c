@@ -7,6 +7,7 @@
 
 #include <sys/file.h>
 #include "qemu/osdep.h"
+#include "qemu/bitmap.h"
 #include "hw/irq.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -263,70 +264,47 @@ static bool cxl_mhsld_reserve_extents(PCIDevice *d,
     return true;
 }
 
-/* TODO: rename to reclaim extents */
-static bool cxl_mhsld_accept_extents(PCIDevice *d,
+static bool cxl_mhsld_reclaim_extents(PCIDevice *d,
                                      CXLDCExtentGroupList *ext_groups,
                                      CXLUpdateDCExtentListInPl *in) {
     CXLMHSLDState *s = CXL_MHSLD(d);
+    CXLType3Dev *ct3d = CXL_TYPE3(d);
     CXLDCExtentGroup *ext_group = QTAILQ_FIRST(ext_groups);
     CXLDCExtent *ent;
-    uint64_t dpa, len, i;
-    uint8_t exp;
+    CXLDCRegion *region;
+    g_autofree unsigned long *blk_bitmap = NULL;
+    uint64_t dpa, off, len, size, i;
 
-    /* Mask the accepted extents, so we know not to clear them */
+    /* Get the DCD region via the first requested extent */
+    ent = QTAILQ_FIRST(&ext_group->list);
+    dpa = ent->start_dpa;
+    len = ent->len;
+    region = cxl_find_dc_region(ct3d, dpa, len);
+    size = region->len / MHSLD_BLOCK_SZ;
+    blk_bitmap = bitmap_new(size);
+
+    /* Set all requested extents to 1 in a bitmap */
+    QTAILQ_FOREACH(ent, &ext_group->list, node) {
+        off = ent->start_dpa - region->base;
+        len = ent->len;
+        bitmap_set(blk_bitmap, off / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ);
+    }
+
+    /* Clear bits associated with accepted extents */
     for (i = 0; i < in->num_entries_updated; i++) {
-        dpa = in->updated_entries[i].start_dpa;
+        off = in->updated_entries[i].start_dpa - region->base;
         len = in->updated_entries[i].len;
-
-        /*
-         * exp == (1 << mhd_head) means we expect the accepted
-         * extents to have been reserved in a previous state_set
-         */
-        cxl_mhsld_state_set(s, dpa / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ,
-                (1 << s->mhd_head), ~0);
+        bitmap_clear(blk_bitmap, off / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ);
     }
 
     /*
-     *
-     * [(dpa,len),(dpa,len),...]
-     * pending_list -> [(dpa,len), (dpa,len), ...]
-     *
-     * 1. get each extent in the pending list containing each in->(dpa,len)
-     * 2. add all extent->(dpa,len) to a bitmask
-     * 3. unset all bits covered in the accept list
-     * 4. remaining bits are the ones to be reclaimed
-     *
-     * pending: [0,0,0,1,1,1]  dpa(3),len(3)
-     * accept:  accept(4,2)
-     * [0,0,0,0,1,1]
-     *
-     * pending([4,2], [1,3], [6,7])
-     * accept([4,1], [1,2])
-     * 1 & 2. [0,1,1,1,1,1,0,0,0,...]  - we've skipped [6,7]
-     * 3. [0,0,0,1,1,0,0,0,0,....]
-     * 4. -> cleanup bits [3,4] in mhd state
-     *
-     * allocate:
-     *  0 -> hd_id
-     * accept:
-     *  if rejected - hd_id->0
+     * Reclaim only the extents that belong to unaccepted extents,
+     * i.e. those whose bits are still raised in blk_bitmap
      */
-
-    /* Release pending extents whose block states are not ~0 */
-    QTAILQ_FOREACH(ent, &ext_group->list, node) {
-        dpa = ent->start_dpa / MHSLD_BLOCK_SZ;
-        len = ent->len / MHSLD_BLOCK_SZ;
-        cxl_mhsld_state_clear(s, dpa, len);
-    }
-
-    /* Reconfigure the block states for the accepted extents */
-    for (i = 0; i < in->num_entries_updated; i++) {
-        dpa = in->updated_entries[i].start_dpa;
-        len = in->updated_entries[i].len;
-        exp = ~0 & ~(1u << s->mhd_head);
-
-        cxl_mhsld_state_set(s, dpa / MHSLD_BLOCK_SZ, len / MHSLD_BLOCK_SZ, exp,
-                (1u << s->mhd_head));
+    for (off = find_first_bit(blk_bitmap, size); off < size;) {
+        len = find_next_zero_bit(blk_bitmap, size, off) - off;
+        cxl_mhsld_state_clear(s, off, len);
+        off = find_next_bit(blk_bitmap, size, off + len);
     }
 
     return true;
@@ -477,7 +455,7 @@ static void cxl_mhsld_class_init(ObjectClass *klass, void *data)
     cvc->mhd_get_info = cmd_mhd_get_info;
     cvc->mhd_access_valid = cxl_mhsld_access_valid;
     cvc->mhd_reserve_extents = cxl_mhsld_reserve_extents;
-    cvc->mhd_accept_extents = cxl_mhsld_accept_extents;
+    cvc->mhd_reclaim_extents = cxl_mhsld_reclaim_extents;
     cvc->mhd_release_extent = cxl_mhsld_release_extent;
 }
 
